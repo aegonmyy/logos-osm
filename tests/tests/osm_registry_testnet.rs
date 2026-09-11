@@ -171,7 +171,8 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
         "committed program id drifted from docs — rebuild via tools/guest-builder and re-pin"
     );
 
-    // 1) Deploy the committed guest artifact.
+    // 1) Deploy the committed guest artifact. (The macro unwraps the Ok value
+    // and returns fatal errors directly — no Result to attach context to.)
     let elf = osm_registry::osm_registry_elf();
     let elf_path = std::env::temp_dir().join(format!("osm-registry-{}.elf", std::process::id()));
     std::fs::write(&elf_path, elf)?;
@@ -183,8 +184,7 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
             },
         ),
         "deploy"
-    )
-    .with_context(|| "deploying osm-registry program".to_string())?;
+    );
     let _ = std::fs::remove_file(&elf_path);
     net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
     println!("deployed program {got}");

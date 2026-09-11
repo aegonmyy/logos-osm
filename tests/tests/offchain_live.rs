@@ -333,7 +333,8 @@ async fn run_lifecycle<S: Storage + 'static>(
     assert_eq!(hosted_local.version, 20260822);
     // A local file that no longer matches upstream is refused, not registered.
     let mut stale = fx.pbf("germany");
-    stale[stale.len() - 1] ^= 0xff;
+    let last = stale.len() - 1;
+    stale[last] ^= 0xff;
     let stale_path = dir.join("stale-germany.osm.pbf");
     std::fs::write(&stale_path, stale)?;
     assert!(
