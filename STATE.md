@@ -19,7 +19,7 @@ reference (and its Codex container is reused here).
 | Closed region set (72 regions, osm-core) | ✅ done, tested |
 | SDK (geofabrik, verify, storage, registry, osm facade, retry, ffi) | ✅ done, 40+ lib tests green |
 | LEZ guest (methods/osm) + committed artifact + host embed | ✅ done, guest unit tests green |
-| CLI (all 12 subcommands incl. local-import full workflow) | ✅ done |
+| CLI (all 11 subcommands incl. local-import full workflow) | ✅ done |
 | FFI C ABI + Qt module + QML app + flake + module.json | ✅ GREEN (lgx built, smoke_lgx full-chain OK) |
 | Hermetic off-chain lifecycle test | ✅ GREEN (CI-runnable, loopback only) |
 | Off-chain lifecycle on real Codex (vault-codex container) | ✅ GREEN |
@@ -153,6 +153,34 @@ registrars. Unit test `registrar_claimed_on_first_touch_only` pins it.
 test, run by name to confirm), artifact rebuilt + re-pinned, cycle profile
 re-measured. Live dev-mode re-run in flight at the time of this note.
 
+## ✅ Milestone — ADVERSARIAL REVIEW (independent agent, 2026-08-22)
+
+A fresh execution-empowered verifier agent evaluated this repo against the
+submission checklist. Full report:
+`docs/adversarial-review-2026-08-22-osm.md`. **Verdict: sound-with-findings.**
+
+It independently reproduced, all exit 0: 65 unit tests (SDK 40 + core 11 +
+registry host 3 + guest bin 11), the hermetic and real-Codex off-chain e2e,
+the CU cycle profile **exactly** matching `docs/CU_COSTS.md`, fmt clean,
+`nix build` both bundles + `smoke_lgx.sh` ("SMOKE OK", Rust-core
+round-trip), a live Geofabrik resolve of all 72 regions, the live sequencer
+lifecycle in dev mode (399 s, incl. the rule-7 batch step), and the greece
+`.md5`/`X-Derived-From` against `docs/PERFORMANCE.md`. It also confirmed
+the program-id pin (build.rs words ↔ committed artifact) and — secondarily —
+that all 5 vault adversarial fixes are present in `~/logos-vault`.
+
+Findings, all Low, all addressed same day:
+
+| # | Finding | Fix |
+|---|---|---|
+| L1 | workspace-wide clippy NOT green (guest: dead code, digit grouping, manual RangeInclusive); CI clippy scoped to host crates | guest source cleaned + CI clippy widened to `--workspace --exclude osm-guest-builder` (verified locally, exit 0; guest bin tests still 11/11) |
+| L2 | STATE.md said "12 subcommands" | corrected to 11 (verified against `enum Cmd`) |
+| L6 | submission said retry.rs has "5 unit tests" (actual 4) | corrected to 4 |
+| L4 | testnet log doesn't echo `RISC0_DEV_MODE=0` | honesty-ledger note added (timing + server-side proof verification corroborate) |
+| NIV | DESIGN.md implied block-scoped `allow(unsafe)` | wording corrected to module-level, file-scoped |
+| L3 | update-check vs local catalog (already disclosed) | no action — disclosed |
+| L5 | `osm-perf/` 324 MB leftover (gitignored) | no action |
+
 ## User-only (never do these)
 
 - Record + upload narrated video (must show proof gen = RISC0_DEV_MODE=0).
@@ -172,3 +200,17 @@ re-measured. Live dev-mode re-run in flight at the time of this note.
 - ~~Testnet deploy NOT yet done~~ **DONE 2026-08-22** — evidence above; the
   public testnet was slow (~13 min for the lifecycle: deploy/Init/3 txs each
   waiting on inclusion), but every tx landed and the readback verified.
+- The captured testnet log
+  (`docs/demo-evidence/osm_registry_public_testnet.log`) does not echo the
+  `RISC0_DEV_MODE` env var itself — "real proofs" for that run is
+  builder-attested, corroborated by timing (~96 s/proving tx, consistent
+  with the standalone dev0-vs-dev delta) and the public sequencer verifying
+  proofs server-side. Future captures should prepend `env | grep RISC0`.
+- **Guest source vs deployed artifact (2026-08-22, post-deploy clippy
+  cleanup):** the deployed/tested bytes remain the **committed artifact**
+  `methods/osm-host/osm_registry.bin` (id pinned in build.rs; unchanged).
+  The guest *source* has since had clippy-only edits (dead-code `#[cfg(test)]`,
+  date-bound consts, `RangeInclusive::contains`) — semantics-identical, but a
+  rebuild from current source would not be byte-identical (guest builds are
+  not byte-reproducible anyway; the artifact is the authority, per the
+  program-id pinning test). No redeploy needed or performed.

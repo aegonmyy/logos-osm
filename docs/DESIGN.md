@@ -151,8 +151,9 @@ the two roles: **Registrar** hosts and registers; **Consumer** fetches,
 verifies, imports, and checks updates — the same SDK facade both ways.
 
 The SDK is `#![deny(unsafe_code)]` (not `forbid`) solely so `ffi.rs` — the
-one boundary that must handle raw pointers — can scope `allow(unsafe)` with
-a comment. Everything else stays checked.
+one boundary that must handle raw pointers — can carry a module-level
+`#![allow(unsafe_code)]`. The allow is scoped to that one file: `lib.rs`
+stays `deny`, so every other module of the SDK is checked.
 
 ## 8. Test strategy
 

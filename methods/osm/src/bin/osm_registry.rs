@@ -40,6 +40,13 @@ use osm_core::{
 /// Fixed PDA seed for the single registry account.
 pub const REGISTRY_SEED: [u8; 32] = *b"/OSM/REGISTRY/V1/SEED/0000000000";
 
+/// Accepted `version` range: any YYYYMMDD date. Grouped YYYY_MM_DD for
+/// readability; clippy's uniform-grouping rule would obscure the dates.
+#[allow(clippy::inconsistent_digit_grouping)]
+pub const MIN_VERSION: u32 = 1_970_01_01; // 1970-01-01
+#[allow(clippy::inconsistent_digit_grouping)]
+pub const MAX_VERSION: u32 = 9_999_12_31; // 9999-12-31
+
 fn main() {
     let (
         lee_core::program::ProgramInput {
@@ -68,6 +75,9 @@ fn registry_pda_id(program_id: &ProgramId) -> AccountId {
 }
 
 /// Derive a region PDA account id for `(program_id, region_path)`.
+// Test-only (the execute path receives pre-derived account ids); excluded
+// from the deployed build so the guest carries no dead code.
+#[cfg(test)]
 fn region_pda_id(program_id: &ProgramId, region_path: &str) -> AccountId {
     AccountId::for_public_pda(program_id, &PdaSeed::new(region_seed(region_path)))
 }
@@ -157,7 +167,7 @@ fn execute(
         Instruction::RegisterRegionsBatch { registrations } => {
             let n = registrations.len();
             assert!(
-                n >= 1 && n <= MAX_BATCH,
+                (1..=MAX_BATCH).contains(&n),
                 "RegisterRegionsBatch: need 1..={MAX_BATCH} registrations, got {n}"
             );
             assert_eq!(
@@ -252,7 +262,7 @@ fn register_one(
     // regions outside the frozen closed set.
     let (parent, level) = require_in_set(path);
     assert!(
-        registration.version >= 1_970_010_1 && registration.version <= 9_999_123_1,
+        (MIN_VERSION..=MAX_VERSION).contains(&registration.version),
         "RegisterRegion: version {version} is not a YYYYMMDD date",
         version = registration.version
     );

@@ -51,8 +51,10 @@ jobs:
         # riscv32im risc0 toolchain and is NOT rebuilt here — osm-host embeds
         # the committed artifact (methods/osm-host/osm_registry.bin) with the
         # program id pinned in its build.rs, so its build needs no risc0
-        # toolchain in this job (rebuild path: tools/guest-builder).
-        run: cargo clippy -p logos-osm -p logos-osm-cli -p osm-core -p osm-registry --all-targets -- -D warnings
+        # toolchain in this job (rebuild path: tools/guest-builder). Clippy
+        # covers the whole workspace except osm-guest-builder (needs the
+        # risc0 toolchain); the guest bin clippy-compiles on the host target.
+        run: cargo clippy --workspace --exclude osm-guest-builder --all-targets -- -D warnings
 
       - name: Build all targets
         # tools/guest-builder is the deliberate artifact-rebuild path: its
