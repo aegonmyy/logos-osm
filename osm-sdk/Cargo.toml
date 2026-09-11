@@ -1,0 +1,45 @@
+[package]
+name = "logos-osm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reusable OSM registry SDK: Geofabrik discovery, Logos Storage hosting, MD5 verification, and the LEZ registry client."
+
+[lib]
+name = "logos_osm"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# One source of truth for the closed region set + shared registry types,
+# shared with the RISC0 guest (which embeds them on-chain).
+osm-core = { path = "../methods/osm-core" }
+lee.workspace = true
+lee_core.workspace = true
+# AccountIdentity for mapping built txs onto wallet signing sets.
+wallet.workspace = true
+risc0-zkvm.workspace = true
+sha2.workspace = true
+md-5 = { workspace = true, features = ["asm"] }
+hex.workspace = true
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+bytes.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+# The example derives the deployed program id for the registration tx.
+osm-registry = { path = "../methods/osm-host" }
+
+[[example]]
+name = "host_region"
+path = "examples/host_region.rs"

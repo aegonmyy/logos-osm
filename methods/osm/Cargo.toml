@@ -1,0 +1,17 @@
+[package]
+name = "osm-registry-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LEZ RISC0 guest: the OSM region registry."
+
+[dependencies]
+lee_core.workspace = true
+osm-core = { path = "../osm-core" }
+risc0-zkvm.workspace = true
+serde.workspace = true
+borsh.workspace = true
+
+[features]
+default = []

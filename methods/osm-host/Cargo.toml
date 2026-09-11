@@ -1,0 +1,17 @@
+[package]
+name = "osm-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host crate that embeds the compiled OSM-registry guest ELF + program id, for deployment and PDA derivation."
+
+[dependencies]
+lee.workspace = true
+
+[dev-dependencies]
+# compute_image_id for the bytes->id->docs verification test.
+risc0-zkvm.workspace = true
+
+[features]
+default = []

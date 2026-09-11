@@ -1,0 +1,13 @@
+# Build config for the RISC0 guest target.
+#
+# getrandom 0.3 selects its backend via a `--cfg getrandom_backend="..."`
+# rustc flag (not a cargo feature). On the risc0 target there is no platform
+# backend, so we must select the `custom` backend, which resolves to the
+# `__getrandom_v03_custom` symbol exported by `risc0-zkvm-platform`. The guest
+# never calls getrandom, but the crate must still compile.
+#
+# (The `cargo risczero build` Docker container sets this cfg for us; this
+# config lets `cargo +risc0 build` work locally without Docker.)
+
+[target.riscv32im-risc0-zkvm-elf]
+rustflags = ["--cfg", "getrandom_backend=\"custom\""]

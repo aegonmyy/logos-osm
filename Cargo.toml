@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = ["osm-sdk", "cli", "methods/osm-core", "methods/osm", "methods/osm-host", "tests", "tools/guest-builder"]
+default-members = ["osm-sdk", "cli", "methods/osm-core", "methods/osm-host"]
+# `methods/osm` is the RISC0 guest crate (risc0 target) and `tools/guest-builder`
+# is the deliberate artifact-rebuild tool; neither is a default member because
+# `cargo build`/`cargo test` on the host should not rebuild guest ELFs
+# (a risc0 guest build is not byte-reproducible across machines — see
+# methods/osm-host/build.rs).
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aegonmyy/logos-osm"
+
+[workspace.dependencies]
+# ---- LEZ stack (pinned: guest/host/test must share the same tag) ----
+# v0.2.4 is what the public testnet runs (LP-0008 lesson: a v0.2.0 client's
+# transactions sync but are never included after the v0.2.1 fee/kind changes).
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+key_protocol = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+test_fixtures = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+test_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+
+# ---- crypto / hashing ----
+sha2 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
+borsh = { version = "1", features = ["derive"] }
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+# Build-time only (tools/guest-builder): produces the committed guest artifact.
+risc0-build = "=3.0.5"
+
+# ---- async / http ----
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "fs"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+futures = "0.3"
+bytes = "1"
+# ReaderStream: stream a verified file into a reqwest body without buffering
+# GB-scale PBFs in memory.
+tokio-util = { version = "0.7", features = ["io"] }
+
+# ---- misc ----
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
+
+[profile.release]
+lto = "thin"

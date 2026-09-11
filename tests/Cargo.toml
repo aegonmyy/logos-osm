@@ -1,0 +1,33 @@
+[package]
+name = "osm-integration-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "End-to-end integration tests for the OSM distribution system against a standalone LEZ sequencer."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+logos-osm = { path = "../osm-sdk" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+anyhow.workspace = true
+serde_json.workspace = true
+borsh.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+# Live harness: spins up bedrock + sequencer + indexer + wallet. Heavy build.
+test_fixtures.workspace = true
+wallet.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+# The embedded OSM-registry ELF + program id (so the test deploys the exact
+# binary the guest crate produces) and the shared instruction types.
+osm-registry = { path = "../methods/osm-host" }
+osm-core = { path = "../methods/osm-core" }
+# `prove` enables the local executor, which the cycle-profile test uses to
+# measure real guest cycle counts per instruction (CU costs, docs/CU_COSTS.md).
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std", "prove"] }
+tempfile.workspace = true

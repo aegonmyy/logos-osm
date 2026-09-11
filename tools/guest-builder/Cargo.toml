@@ -1,0 +1,18 @@
+[package]
+name = "osm-guest-builder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deliberate rebuild tool for the committed OSM registry guest artifact (methods/osm-host/osm_registry.bin)."
+
+# risc0-build discovers the guest crate(s) through this metadata section.
+[package.metadata.risc0]
+methods = ["../../methods/osm"]
+
+[build-dependencies]
+risc0-build.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
