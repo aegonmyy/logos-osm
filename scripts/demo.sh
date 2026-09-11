@@ -22,6 +22,18 @@
 # A Codex storage node on :8080 is started automatically if not reachable
 # (digest-pinned; see README "Logos Storage node").
 #
+# Log filtering: RUST_LOG=warn keeps the output readable; `risc0_zkvm=info`
+# additionally surfaces the per-session proof-execution summary (segments /
+# total cycles) — the on-screen evidence of real proving the spec's video
+# requirement asks for (the target is the crate name `risc0_zkvm`, underscore
+# — EnvFilter's `risc0=info` does NOT match it — and risc0's Session::log()
+# early-returns unless RISC0_INFO is set); `indexer_core=off` silences the
+# standalone stack's indexer follower, which cannot re-verify
+# privacy-preserving proofs of freshly deployed programs (no guest ELF) and
+# parks at the first private block, logging one ERROR per block after. The
+# sequencer is the authority — it validates every proof before inclusion and
+# the tests read state back from it. Presentation-only (see ISSUES_TO_FILE.md).
+#
 # Usage:
 #   ./scripts/demo.sh            # full lifecycle (real proofs)
 #   ./scripts/demo.sh dev        # fast: RISC0_DEV_MODE=1 (no proof gen)
@@ -86,8 +98,14 @@ else
   banner "Logos Storage (Codex) already reachable on :8080 — reusing it"
 fi
 
+DEMO_LOG_FILTER='warn,risc0_zkvm=info,indexer_core=off'
+# risc0's per-session proof summary (segments / user / total cycles) is
+# opt-in via RISC0_INFO — without it Session::log() returns before logging
+# (risc0-zkvm 3.0.5 src/host/server/session.rs).
+export RISC0_INFO=1
+
 banner "Part 1: on-chain registry lifecycle  [RISC0_DEV_MODE=$RISC0_DEV_MODE]"
-( cd "$REPO_DIR" && RUST_LOG=warn cargo test -p osm-integration-tests \
+( cd "$REPO_DIR" && RUST_LOG="$DEMO_LOG_FILTER" cargo test -p osm-integration-tests \
     --test osm_registry_live -- --nocapture --ignored --test-threads=1 )
 
 banner "Part 2: off-chain lifecycle on real Codex storage"
