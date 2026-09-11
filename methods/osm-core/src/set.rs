@@ -58,8 +58,9 @@ impl Level {
         }
     }
 
-    /// From the string form stored on-chain.
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse the JSON string form. (On-chain the level is stored as u8;
+    /// this exists for the JSON surface.)
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "country" => Some(Self::Country),
             "subregion" => Some(Self::Subregion),
