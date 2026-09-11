@@ -108,6 +108,18 @@ Accounts are PDAs derived from `(program_id, seed)`: one registry PDA
 (Rebuild path: `tools/guest-builder` — needs the risc0 toolchain; CI embeds
 the committed artifact instead.)
 
+### Deployed on the public LEZ testnet
+
+Program `77ecdf2f…1c43f0` is live on `https://testnet.lez.logos.co`
+(registry PDA
+`fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7`).
+The full lifecycle was exercised there by
+`tests/tests/osm_registry_testnet.rs` (`RISC0_DEV_MODE=0`): deploy → `Init` →
+`RegisterRegion(germany)` → `RegisterRegionsBatch(france, us/california)` —
+every tx included (blocks ~18830→18843) and the state read back from chain:
+**3 regions, 3 registrations**. Captured log:
+`docs/demo-evidence/osm_registry_public_testnet.log`.
+
 ## Quickstart (CLI)
 
 ```sh

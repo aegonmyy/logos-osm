@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> Last updated: 2026-08-22 (by Claude during the "iterate until done" run).
+> Last updated: 2026-08-22, 14:2x (by Claude — public testnet GREEN; final CI run pending).
 
 ## Mission
 
@@ -12,7 +12,7 @@ This is hedge #2 of 4 in the FCFS hedge plan (vault #75 = done, this = OSM
 is **read-only** (another agent uses it); `~/logos-vault` is a pattern
 reference (and its Codex container is reused here).
 
-## Status: functionally complete; verification + ship-out in flight
+## Status: functionally complete; public testnet GREEN; final CI run in flight
 
 | Area | State |
 |---|---|
@@ -20,16 +20,17 @@ reference (and its Codex container is reused here).
 | SDK (geofabrik, verify, storage, registry, osm facade, retry, ffi) | ✅ done, 40+ lib tests green |
 | LEZ guest (methods/osm) + committed artifact + host embed | ✅ done, guest unit tests green |
 | CLI (all 12 subcommands incl. local-import full workflow) | ✅ done |
-| FFI C ABI + Qt module + QML app + flake + module.json | ✅ written; **smoke on VPS pending** |
+| FFI C ABI + Qt module + QML app + flake + module.json | ✅ GREEN (lgx built, smoke_lgx full-chain OK) |
 | Hermetic off-chain lifecycle test | ✅ GREEN (CI-runnable, loopback only) |
 | Off-chain lifecycle on real Codex (vault-codex container) | ✅ GREEN |
-| Live sequencer lifecycle (osm_registry_live) | 🔁 dev run FAILED at batch (rule-7 `NonDefaultAccountWithDefaultOwner`); **fix applied to guest** (registrar claimed via `new_claimed_if_default(Claim::Authorized)`), awaiting guest rebuild + re-run |
-| CU cycle profile | ✅ DONE + GREEN (numbers in docs/CU_COSTS.md; re-run after artifact re-pin) |
-| CI workflow (.github/workflows/ci.yml, 4 jobs) | ✅ written; unit job now `--lib --bins` (guest bin tests included); **not yet pushed/run** |
-| README, docs/DESIGN.md, submission/LP-0018.md, scripts/demo.sh | ✅ written |
-| docs/CU_COSTS.md, docs/PERFORMANCE.md | ⏳ awaiting measurements |
-| lgx build + smoke_lgx.sh on VPS | ⏳ pending |
-| GitHub repo + push + CI green + testnet deploy | ⏳ pending (task #17) |
+| Live sequencer lifecycle (osm_registry_live) | ✅ GREEN dev (531.76 s) + RISC0_DEV_MODE=0 (1013.99 s, real Groth16) |
+| **Public LEZ testnet lifecycle (osm_registry_testnet)** | ✅ **GREEN (2026-08-22)** — see milestone below |
+| CU cycle profile | ✅ DONE + GREEN (numbers in docs/CU_COSTS.md) |
+| CI workflow (4 jobs) | ✅ pushed; run 32543830322 green on 9683754 (2 early jobs); **decision run 32576280128 on f4807b9 in flight** (CU-profile + lgx GREEN at last check) |
+| README, docs/DESIGN.md, submission/LP-0018.md, scripts/demo.sh | ✅ written; submission testnet/CI placeholders filled |
+| docs/CU_COSTS.md, docs/PERFORMANCE.md | ✅ measured + filled |
+| lgx build + smoke_lgx.sh on VPS | ✅ GREEN |
+| GitHub repo + push + CI green + testnet deploy | ✅ repo live, testnet done; final CI verdict pending (monitor armed) |
 
 ## Key facts (don't re-derive)
 
@@ -105,15 +106,36 @@ nix build .#osm-lgx .#osm-app-lgx && ./scripts/build-ffi.sh && ./scripts/smoke_l
    wire bytes need `\\"`; malformed outer JSON → nlohmann throws → NULL
    return. (The plugin glue is correct — verified by disassembly: parse,
    per-element string type-check, then `OsmImpl::invokeOpJson`.)
-   `build-ffi.sh` (glibc-matched cdylib) in flight.
-6. fmt + clippy clean, run testnet test (`RISC0_DEV_MODE=0 cargo test …
-   --test osm_registry_testnet -- --ignored`) → record ids in README/
-   submission; commit everything.
-7. Task #17: create private GitHub repo **logos-osm**, push via the token
-   flow (TOKEN env var, push, then `git remote set-url origin` back to the
-   clean URL — **always scrub the token**; user should rotate it: it was
-   pasted in plaintext in a prior session), iterate CI green.
-8. Update memory files (`lp18-project.md`) + this STATE.md.
+6. ✅ fmt + clippy clean (41m29 s full clippy); testnet test run GREEN
+   (milestone below); all ids recorded in README/submission/STATE.
+7. ✅ Repo **logos-osm** created + pushed via the token flow (token scrubbed
+   from remote + verified zero refs). Commits: 9683754 → af91d30 → 3ddd00d
+   → f4807b9 (no co-author). CI: run 32543830322 green on the first push
+   except the two test-target compile errors this machine never compiled —
+   fixed in f4807b9; decision run 32576280128 in flight (CU + lgx jobs
+   already GREEN).
+8. ✅ Memory `lp18-project.md` updated per milestone; this STATE.md updated.
+
+## ✅ Milestone — PUBLIC TESTNET LIFECYCLE GREEN (2026-08-22)
+
+`RISC0_DEV_MODE=0 cargo test -p osm-integration-tests --test
+osm_registry_testnet -- --ignored --nocapture` against
+`https://testnet.lez.logos.co`: **1 passed, 0 failed, 771.99 s, exit 0.**
+
+| Step | Evidence |
+|---|---|
+| Deploy | tx `0xea6ac729f45586af54ed1a73c8008211f25d850db50723fe820f2723d7021f51` |
+| Program | `77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0` (= committed artifact id) |
+| Init | tx `0x2ab1afc37b68ecc66c075b916677866c6efae6cb0e87f3399587d56f5ff14bed` |
+| Registry PDA | `fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7` |
+| RegisterRegion(germany) | tx `0x4934796a05abfdaf6e186724bf722117f48aa05231c9fdb6c6501a87e5679c06` |
+| germany PDA | `bb1f5e545c4fbbe6d35b01616516565b87417f074ca110467ee9b9685c8506b8` |
+| RegisterRegionsBatch | tx `0x28e8c4d39387a36eef82a4b768732ee9203298d030e1ac115082d2762cb937e7` |
+| Readback | `3 regions, 3 registrations` (germany, france, us/california), blocks ~18830→18843 |
+
+Full log: `docs/demo-evidence/osm_registry_public_testnet.log`. The rule-7
+fix (registrar claim-on-first-touch) is now proven on the **public** testnet,
+not just the standalone sequencer.
 
 ### Rule-7 postmortem (2026-08-22)
 
@@ -147,4 +169,6 @@ re-measured. Live dev-mode re-run in flight at the time of this note.
 - Update check compares Geofabrik-published vs **local catalog** version (the
   client's view of what it registered); the on-chain registry readback is via
   the wallet/RPC (osm_registry_live proves on-chain state) — documented.
-- Testnet deploy NOT yet done (unlike vault). Don't claim it until step 7.
+- ~~Testnet deploy NOT yet done~~ **DONE 2026-08-22** — evidence above; the
+  public testnet was slow (~13 min for the lifecycle: deploy/Init/3 txs each
+  waiting on inclusion), but every tx landed and the readback verified.

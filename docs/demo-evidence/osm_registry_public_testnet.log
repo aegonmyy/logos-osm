@@ -1,0 +1,48 @@
+   Compiling osm-integration-tests v0.1.0 (/home/ubuntu/logos-osm/tests)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 05s
+     Running tests/osm_registry_testnet.rs (target/debug/deps/osm_registry_testnet-d898b49059d35273)
+
+running 1 test
+test osm_registry_lifecycle_on_public_testnet ... Config not found, setting up default config
+Created configs dir at path /tmp/osm-testnet-707073
+Configs set up
+Statistics not found, choosing empty
+Latest block is 18830
+Syncing to block 18830. Blocks to sync: 18830
+Synced to block 18830 in 537.440112343s
+testnet: https://testnet.lez.logos.co (start block 18830)
+Transaction hash is ea6ac729f45586af54ed1a73c8008211f25d850db50723fe820f2723d7021f51
+Transaction is included in block 18840
+Transaction data is ProgramDeployment(ProgramDeploymentTransaction { message: Message { bytecode: <471820 bytes> } })
+Stored statistics at /tmp/osm-testnet-707073/statistics.json
+Latest block is 18840
+Syncing to block 18840. Blocks to sync: 10
+Synced to block 18840 in 3.924745089s
+deployed program 77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0
+Generated new account with account_id Public/9XioeHFw6KmbqF9y1dxff7zdfX2CaNG5L4PyxyDHEpxc at path /0
+With pk ab287e43750056ffc6798e33abae6a43052d401444cc78c3f1227e5a7c67afd3
+Stored statistics at /tmp/osm-testnet-707073/statistics.json
+Generated new account with account_id Public/8q6Tx5auti7dXSm8H7CjNbjAT8582jVwFU2LcNCx1UxT at path /1
+With pk ac96aa4c12e9f9d3c4f1721f691e83167645e4e12e7764a96bb241167322f9ad
+Stored statistics at /tmp/osm-testnet-707073/statistics.json
+Latest block is 18840
+Latest block is 18841
+Syncing to block 18841. Blocks to sync: 1
+Synced to block 18841 in 161.380379ms
+Init: tx 0x2ab1afc37b68ecc66c075b916677866c6efae6cb0e87f3399587d56f5ff14bed
+Init: owner bound, registry PDA fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7
+Latest block is 18842
+Syncing to block 18842. Blocks to sync: 1
+Synced to block 18842 in 160.980408ms
+RegisterRegion(germany): tx 0x4934796a05abfdaf6e186724bf722117f48aa05231c9fdb6c6501a87e5679c06
+germany registered; region PDA bb1f5e545c4fbbe6d35b01616516565b87417f074ca110467ee9b9685c8506b8
+Latest block is 18843
+Syncing to block 18843. Blocks to sync: 1
+Synced to block 18843 in 472.473412ms
+RegisterRegionsBatch: tx 0x28e8c4d39387a36eef82a4b768732ee9203298d030e1ac115082d2762cb937e7
+testnet lifecycle OK: 3 regions, 3 registrations; program 77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0; registry PDA fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 771.99s
+
+EXIT:0
