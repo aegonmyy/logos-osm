@@ -20,10 +20,20 @@ What the log shows:
   inclusion means the sequencer verified each tx's real proof;
 - final readback assertions passing (`ok` / `test result: ok`).
 
-Proof generation is off-screen in this capture (`RUST_LOG=warn` suppresses
-risc0's info-level logs), but it is what the run did: the identical test in
-dev mode (`RISC0_DEV_MODE=1`, no proving) completes in ~532 s; this capture
-took **1013.99 s** — the difference is Groth16 proof generation and
-verification per transaction. The narrated video (prize deliverable) shows
-the proof-generation output on screen; that recording is done by the
-submitter outside this repo.
+Proof generation is off-screen in this text capture (`RUST_LOG=warn`
+suppresses risc0's info-level logs), but it is what the run did: the
+identical test in dev mode (`RISC0_DEV_MODE=1`, no proving) completes in
+~532 s; this capture took **1013.99 s** — the difference is Groth16 proof
+generation and verification per transaction.
+
+`osm-demo-dev0-20260822T195048Z.cast` — the **full demo** (`scripts/demo.sh`,
+on-chain + off-chain legs + unit tests) captured as an asciinema cast
+(200×50 terminal, `RISC0_DEV_MODE=0`, run 2026-08-22). Unlike the text log
+above, the demo now runs with `RUST_LOG='warn,risc0_zkvm=info,
+indexer_core=off'` + `RISC0_INFO=1`, so the risc0 per-session proof summary
+(segments / user / total cycles, ecalls, syscalls) is **on screen** for
+every prove — the explicit proof-generation evidence the spec's video
+requirement asks for (the wall-clock delta above is the same evidence for
+the text log). This cast is the footage for the narrated video; the
+voiceover is added by the submitter on replay (`asciinema play` + screen
+recorder, or convert with `agg`).

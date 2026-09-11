@@ -181,9 +181,36 @@ Findings, all Low, all addressed same day:
 | L3 | update-check vs local catalog (already disclosed) | no action — disclosed |
 | L5 | `osm-perf/` 324 MB leftover (gitignored) | no action |
 
+## 🎬 Milestone — DEMO VIDEO CAPTURE, asciinema detached (2026-08-22)
+
+Spec: "A recorded video demo … must show terminal output (including proof
+generation) to confirm `RISC0_DEV_MODE=0` was active". Same process as the
+vault hedge (per user: asciinema, zoomed out, no text overlays, detached
+from the agent session, voiceover later):
+
+- `scripts/demo.sh` log filter upgraded to
+  `RUST_LOG='warn,risc0_zkvm=info,indexer_core=off'` + `RISC0_INFO=1` —
+  surfaces the risc0 per-session proof summary on screen (two non-obvious
+  gates: EnvFilter target is the crate name `risc0_zkvm` NOT `risc0`, and
+  `Session::log()` early-returns without `RISC0_INFO` set — risc0-zkvm
+  3.0.5) and silences the standalone indexer follower (benign parking;
+  sequencer is the authority — see vault ISSUES_TO_FILE.md #9, same stack).
+- `scripts/record-demo.sh` (new): records demo.sh under `asciinema rec`
+  inside a **detached tmux session created `-x 200 -y 50`** (launch:
+  `setsid nohup bash scripts/record-demo.sh`). Sizing lesson from the vault:
+  asciinema allocates its pty at ITS terminal's size — a post-hoc `stty`
+  records at 80×24; the tmux pane size is inherited correctly.
+- Cast: `docs/demo-evidence/osm-demo-dev0-20260822T195048Z.cast` (200×50,
+  started 19:50:48Z, detached). The demo-evidence README previously said
+  the recording is "done by the submitter outside this repo" — now the cast
+  is committed in-repo; only the voiceover remains user-only.
+
 ## User-only (never do these)
 
-- Record + upload narrated video (must show proof gen = RISC0_DEV_MODE=0).
+- Record + upload narrated video — voiceover over the committed cast
+  (`asciinema play docs/demo-evidence/osm-demo-dev0-20260822T195048Z.cast`
+  + screen recorder, or `agg` to convert; must show proof gen =
+  RISC0_DEV_MODE=0).
 - File GitHub issues for Logos tech problems.
 - Open the solution PR.
 
