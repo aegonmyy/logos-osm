@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> Last updated: 2026-08-22, 14:2x (by Claude — public testnet GREEN; final CI run pending).
+> Last updated: 2026-08-22, 14:3x (by Claude — ALL GREEN: public testnet lifecycle + all 4 CI jobs on main). Only user-only steps remain.
 
 ## Mission
 
@@ -12,7 +12,7 @@ This is hedge #2 of 4 in the FCFS hedge plan (vault #75 = done, this = OSM
 is **read-only** (another agent uses it); `~/logos-vault` is a pattern
 reference (and its Codex container is reused here).
 
-## Status: functionally complete; public testnet GREEN; final CI run in flight
+## Status: ✅ COMPLETE — public testnet GREEN, all 4 CI jobs GREEN on main
 
 | Area | State |
 |---|---|
@@ -26,11 +26,11 @@ reference (and its Codex container is reused here).
 | Live sequencer lifecycle (osm_registry_live) | ✅ GREEN dev (531.76 s) + RISC0_DEV_MODE=0 (1013.99 s, real Groth16) |
 | **Public LEZ testnet lifecycle (osm_registry_testnet)** | ✅ **GREEN (2026-08-22)** — see milestone below |
 | CU cycle profile | ✅ DONE + GREEN (numbers in docs/CU_COSTS.md) |
-| CI workflow (4 jobs) | ✅ pushed; run 32543830322 green on 9683754 (2 early jobs); **decision run 32576280128 on f4807b9 in flight** (CU-profile + lgx GREEN at last check) |
+| CI workflow (4 jobs) | ✅ **all 4 jobs GREEN** on f4807b9 (run 32576280128): Build+unit, Live LEZ e2e, CU profile, .lgx bundles |
 | README, docs/DESIGN.md, submission/LP-0018.md, scripts/demo.sh | ✅ written; submission testnet/CI placeholders filled |
 | docs/CU_COSTS.md, docs/PERFORMANCE.md | ✅ measured + filled |
 | lgx build + smoke_lgx.sh on VPS | ✅ GREEN |
-| GitHub repo + push + CI green + testnet deploy | ✅ repo live, testnet done; final CI verdict pending (monitor armed) |
+| GitHub repo + push + CI green + testnet deploy | ✅ **ALL DONE (2026-08-22)** — repo live, testnet GREEN, CI 4/4 GREEN (run 32576280128 on f4807b9) |
 
 ## Key facts (don't re-derive)
 
