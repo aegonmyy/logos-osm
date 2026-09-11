@@ -184,7 +184,7 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
         ),
         "deploy"
     )
-    .context("deploying osm-registry program")?;
+    .with_context(|| "deploying osm-registry program".to_string())?;
     let _ = std::fs::remove_file(&elf_path);
     net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
     println!("deployed program {got}");

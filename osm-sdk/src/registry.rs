@@ -3,9 +3,9 @@
 //! The registry is the public index of hosted region snapshots: one region
 //! PDA per closed-set region holding a [`RegionEntry`] — the append-only
 //! [`Mirror`] list of (registrar, CID, MD5, version, timestamp) records.
-//! Registration is **permissionless** (any signer may mirror; adoption wants
-//! >= 3 distinct registrars), so this client takes an explicit registrar
-//! account rather than a privileged owner.
+//! Registration is **permissionless** — any signer may mirror; adoption
+//! wants ≥ 3 distinct registrars — so this client takes an explicit
+//! registrar account rather than a privileged owner.
 //!
 //! ## Encoding contract with the guest
 //!

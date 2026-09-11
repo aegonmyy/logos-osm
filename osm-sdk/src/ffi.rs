@@ -57,14 +57,16 @@ fn err(msg: impl Into<String>) -> *mut c_char {
 }
 
 /// Free a string previously returned by this FFI.
+///
+/// # Safety
+/// `ptr` must be a non-null pointer previously returned by this FFI (or
+/// null), and must not have been freed already.
 #[no_mangle]
-pub extern "C" fn logos_osm_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn logos_osm_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        drop(CString::from_raw(ptr));
-    }
+    drop(CString::from_raw(ptr));
 }
 
 #[no_mangle]
@@ -262,21 +264,27 @@ fn region_json(r: &Region) -> Value {
 
 /// Invoke an OSM operation. `name` and `args_json` are null-terminated UTF-8.
 /// Returns a heap JSON string the caller frees with `logos_osm_free_string`.
+///
+/// # Safety
+/// `name` must be a valid null-terminated UTF-8 C string. `args_json`, if
+/// non-null, must be a valid null-terminated UTF-8 C string whose contents
+/// parse as a JSON object.
 #[no_mangle]
-pub extern "C" fn logos_osm_invoke(name: *const c_char, args_json: *const c_char) -> *mut c_char {
-    let name = unsafe {
-        if name.is_null() {
-            return err("null op name");
-        }
-        match CStr::from_ptr(name).to_str() {
-            Ok(s) => s.to_string(),
-            Err(_) => return err("non-utf8 op name"),
-        }
+pub unsafe extern "C" fn logos_osm_invoke(
+    name: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    if name.is_null() {
+        return err("null op name");
+    }
+    let name = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return err("non-utf8 op name"),
     };
     let args: Value = if args_json.is_null() {
         Value::Object(Default::default())
     } else {
-        let raw = unsafe { CStr::from_ptr(args_json) };
+        let raw = CStr::from_ptr(args_json);
         match raw.to_str() {
             Err(_) => return err("non-utf8 args"),
             Ok(s) => serde_json::from_str(s).unwrap_or_else(|_| Value::Object(Default::default())),
@@ -303,7 +311,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
             let parent = str_arg(args, "parent");
             let out: Vec<Value> = REGIONS
                 .iter()
-                .filter(|r| parent.as_deref().map_or(true, |p| r.parent == Some(p)))
+                .filter(|r| parent.as_deref().is_none_or(|p| r.parent == Some(p)))
                 .map(region_json)
                 .collect();
             ok(json!({ "regions": out, "count": out.len() }))
@@ -741,7 +749,8 @@ mod tests {
     fn invoke(name: &str, args: &serde_json::Value) -> Value {
         let n = CString::new(name).unwrap();
         let a = CString::new(args.to_string()).unwrap();
-        let ptr = logos_osm_invoke(n.as_ptr(), a.as_ptr());
+        // SAFETY: both pointers are valid null-terminated UTF-8 CStrings.
+        let ptr = unsafe { logos_osm_invoke(n.as_ptr(), a.as_ptr()) };
         let s = unsafe { CString::from_raw(ptr) }
             .to_string_lossy()
             .to_string();
@@ -750,7 +759,8 @@ mod tests {
 
     fn invoke_no_args(name: &str) -> Value {
         let n = CString::new(name).unwrap();
-        let ptr = logos_osm_invoke(n.as_ptr(), std::ptr::null());
+        // SAFETY: `n` is a valid CString; args is null (empty object).
+        let ptr = unsafe { logos_osm_invoke(n.as_ptr(), std::ptr::null()) };
         let s = unsafe { CString::from_raw(ptr) }
             .to_string_lossy()
             .to_string();

@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(reg.cid, "cid");
         assert_eq!(reg.version, 20260821);
         assert_eq!(reg.timestamp, 42);
-        assert_eq!(s.registration(None).timestamp > 1_700_000_000, true);
+        assert!(s.registration(None).timestamp > 1_700_000_000);
     }
 
     #[tokio::test]
