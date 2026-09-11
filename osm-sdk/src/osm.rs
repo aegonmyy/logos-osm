@@ -278,13 +278,20 @@ impl<S: Storage> OsmClient<S> {
             .await
             .with_context(|| format!("validating {} as an OSM PBF", pbf.display()))?;
         let mut catalog = self.load_catalog();
+        // Same bytes as an existing record => keep its provenance (the
+        // version + storage CID a host recorded). Different bytes => the
+        // file's provenance is unknown to this machine, recorded honestly.
+        let (version, cid) = match catalog.iter().find(|c| c.region == region) {
+            Some(prior) if prior.md5 == computed => (prior.version, prior.cid.clone()),
+            _ => (0, None),
+        };
         catalog.retain(|c| c.region != region);
         catalog.push(CatalogRecord {
             region: region.to_string(),
             path: pbf.to_path_buf(),
             md5: computed,
-            version: 0,
-            cid: None,
+            version,
+            cid,
             imported_at: now_unix(),
         });
         self.save_catalog(&catalog)?;
@@ -294,6 +301,43 @@ impl<S: Storage> OsmClient<S> {
             bytes: data_len,
             md5: computed,
             blobs,
+        })
+    }
+
+    /// **Host a local PBF** (the "local import" workflow): verify the file's
+    /// MD5 against Geofabrik's *currently published* checksum, store it in
+    /// Logos Storage, and return the snapshot ready to register — the same
+    /// guarantees as [`OsmClient::host_region`] but with bytes the user
+    /// already has. The published checksum is authoritative: a local file
+    /// that no longer matches upstream is refused, not silently registered.
+    pub async fn host_local(&self, region: &str, pbf: &Path) -> Result<HostedSnapshot> {
+        let r = by_path(region)
+            .with_context(|| format!("{region} is not in the predefined region set"))?;
+        let published = self.geofabrik.fetch_md5(r).await?;
+        let (blobs, computed) = validate_pbf(pbf)
+            .await
+            .with_context(|| format!("validating {} as an OSM PBF", pbf.display()))?;
+        anyhow::ensure!(
+            matches(&computed, &published.checksum),
+            "MD5 mismatch for {region}: local file is {} but Geofabrik published {} — \
+             refusing to store/register a file that no longer matches upstream",
+            hex::encode(computed),
+            hex::encode(published.checksum)
+        );
+        let bytes = tokio::fs::metadata(pbf).await?.len();
+        let stored = self
+            .storage
+            .put_file(pbf)
+            .await
+            .with_context(|| format!("storing local {region} in Logos Storage"))?;
+        tracing::info!(region, blobs, "hosted local PBF");
+        Ok(HostedSnapshot {
+            region: region.to_string(),
+            cid: stored.cid,
+            checksum: published.checksum,
+            version: published.version.unwrap_or(0),
+            bytes,
+            path: pbf.to_path_buf(),
         })
     }
 
@@ -465,7 +509,6 @@ mod tests {
             header.push(0x0a); // field 1, wire 2
             header.push(t.len() as u8);
             header.extend_from_slice(t.as_bytes());
-            let mut ds = (data.len() as u64).to_le_bytes(); // encode varint
             let mut varint = Vec::new();
             let mut v = data.len() as u64;
             loop {
@@ -477,7 +520,6 @@ mod tests {
                 }
                 varint.push(b | 0x80);
             }
-            let _ = ds;
             header.push(0x18); // field 3, wire 0
             header.extend_from_slice(&varint);
             out.extend_from_slice(&(header.len() as u32).to_be_bytes());
@@ -560,7 +602,11 @@ mod tests {
         // The facade's snapshot -> registration -> (decode) chain holds.
         let dir = tempfile::tempdir().unwrap();
         let c = client(dir.path());
-        let stored = c.storage().put_bytes(Bytes::from_static(b"pbf")).await.unwrap();
+        let stored = c
+            .storage()
+            .put_bytes(Bytes::from_static(b"pbf"))
+            .await
+            .unwrap();
         let back = c.storage().get_bytes(&stored.cid).await.unwrap();
         assert_eq!(&back[..], b"pbf");
     }

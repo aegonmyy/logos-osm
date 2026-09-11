@@ -31,3 +31,4 @@ osm-core = { path = "../methods/osm-core" }
 # measure real guest cycle counts per instruction (CU costs, docs/CU_COSTS.md).
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std", "prove"] }
 tempfile.workspace = true
+hex.workspace = true

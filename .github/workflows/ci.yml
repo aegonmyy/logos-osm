@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RISC0_DEV_MODE: "1"
+
+jobs:
+  unit-tests:
+    name: Build + unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free runner disk space
+        # The wallet stack's librocksdb-sys + the risc0 toolchain + the
+        # workspace target dir overflow the runner's ~14 GB free disk
+        # (observed on the sibling vault repo: cc-rs "No space left on
+        # device" while archiving librocksdb.a). Reclaim the preinstalled
+        # SDKs this repo never uses.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (1.94)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        # Scope: host crates only. The guest crate (methods/osm) targets the
+        # riscv32im risc0 toolchain and is NOT rebuilt here — osm-host embeds
+        # the committed artifact (methods/osm-host/osm_registry.bin) with the
+        # program id pinned in its build.rs, so its build needs no risc0
+        # toolchain in this job (rebuild path: tools/guest-builder).
+        run: cargo clippy -p logos-osm -p logos-osm-cli -p osm-core -p osm-registry --all-targets -- -D warnings
+
+      - name: Build all targets
+        # tools/guest-builder is the deliberate artifact-rebuild path: its
+        # build.rs compiles the guest for riscv32im via risc0-build, which
+        # needs the risc0 toolchain this job doesn't install (methods/osm-host
+        # embeds the committed artifact, so nothing here depends on it).
+        run: cargo build --workspace --all-targets --exclude osm-guest-builder
+
+      - name: Unit tests
+        # --bins pulls in the guest crate's bin-target unit tests (its `#[cfg(test)]`
+        # suite runs the exact on-chain execute() as ordinary host tests; the
+        # crate has no lib target).
+        run: cargo test --workspace --lib --bins --exclude osm-guest-builder
+
+      - name: Hermetic off-chain lifecycle (fixture Geofabrik + in-memory storage)
+        # discover -> host (verify MD5) -> store -> registration tx -> fetch
+        # -> verify -> import -> update check -> tamper rejection, with zero
+        # network beyond loopback.
+        run: cargo test -p osm-integration-tests --test offchain_live
+
+  live-e2e:
+    name: Live LEZ e2e (Docker sequencer + real Codex)
+    runs-on: ubuntu-22.04
+    # The full registry lifecycle against a standalone LEZ sequencer brought
+    # up by test_fixtures::TestContext (heavy, ~5-6 min) plus the off-chain
+    # lifecycle against a real Codex storage container.
+    steps:
+      - name: Free runner disk space
+        # Same exhaustion as the unit job: at 85 MB free the Docker
+        # sequencer's funding backend 500s ("Requested wallet state for
+        # unknown block") and txs never get included.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -a -f >/dev/null || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (1.94)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Install risc0 toolchain
+        run: |
+          curl -L https://risczero.com/install | bash
+          export PATH="$HOME/.risc0/bin:$PATH"
+          rzup_install() {
+            for i in 1 2 3 4 5; do
+              if rzup install "$@"; then return 0; fi
+              echo "rzup install $* failed (attempt $i/5); retrying in 20s..."
+              sleep 20
+            done
+            echo "::error::rzup install $* exhausted retries"
+            return 1
+          }
+          rzup_install cargo-risczero 3.0.5
+          rzup_install r0vm 3.0.5
+          rzup_install rust 1.97.0
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Live registry lifecycle (sequencer)
+        run: |
+          cargo test -p osm-integration-tests --test osm_registry_live -- --ignored --nocapture --test-threads=1
+
+      - name: Off-chain E2E on real Codex storage
+        # Brings up the real Logos Storage node in a container and runs the
+        # full host->store->fetch->import flow against it (not in-memory).
+        # The node takes ~1-2 min to bootstrap past port-bind; wait for the
+        # list endpoint to answer 200 (the test also retries its probe).
+        run: |
+          set -e
+          # Digest-pinned (content address) + entrypoint override: the image's
+          # default config is broken upstream — ENTRYPOINT /docker-entrypoint.sh
+          # with CMD ["codex"], but no `codex` binary exists (the binary is
+          # /usr/local/bin/storage), so a plain `docker run` always dies with
+          # "exec: codex: not found".
+          docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
+            --entrypoint /usr/local/bin/storage \
+            codexstorage/nim-codex@sha256:25d9409b591da37200896e68fd9e4c591566f1ad0a80c0633c6cd5011ae56edb \
+            --api-bindaddr=0.0.0.0 --api-port=8080
+          ready=""
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              "http://127.0.0.1:8080/api/storage/v1/data" || true)
+            if [ "$code" = "200" ]; then ready=1; echo "codex ready after ${i} probes"; break; fi
+            sleep 2
+          done
+          [ -n "$ready" ] || { echo "codex never became ready"; docker logs osm-codex | tail -20; exit 1; }
+          OSM_CODEX_URL=http://127.0.0.1:8080 \
+            cargo test -p osm-integration-tests --test offchain_live -- --ignored --nocapture
+
+  cycle-profile:
+    name: CU cycle profile (local executor)
+    runs-on: ubuntu-22.04
+    # Real per-instruction guest cycle counts through the risc0 local
+    # executor — the numbers behind docs/CU_COSTS.md (single vs batch).
+    steps:
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (1.94)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cycle profile
+        run: |
+          cargo test --release -p osm-integration-tests --test cycle_profile -- --ignored --nocapture
+
+  lgx-bundles:
+    name: .lgx bundles build + are callable
+    # The nix-built plugin .so links against a newer glibc than ubuntu-22.04
+    # ships (2.35); the smoke dlopens it, so run on 24.04 (glibc 2.39 >= 2.38).
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free runner disk space
+        # The nix store (Qt toolchain + module deps) grows into the same
+        # ~14 GB the runner offers; reclaim the unused preinstalled SDKs.
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Build core + app .lgx bundles
+        run: nix build .#osm-lgx .#osm-app-lgx --print-out-paths
+
+      - name: "Smoke: extracted plugin loads + dispatches over the module C ABI"
+        # No Rust core in this job (no cargo): health() must dispatch through
+        # the generated glue and FAIL CLOSED ("osm core not loaded") — which
+        # proves the plugin is live end-to-end, not a stub. The full chain
+        # (with the Rust cdylib) is scripts/smoke_lgx.sh, run on the VPS.
+        run: SMOKE_NO_FFI=1 ./scripts/smoke_lgx.sh

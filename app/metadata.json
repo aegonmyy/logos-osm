@@ -1,0 +1,26 @@
+{
+  "name": "osm_app",
+  "version": "1.0.0",
+  "description": "Basecamp app for the OpenStreetMap distribution registry: browse the region set, host snapshots to Logos Storage, build LEZ registrations, fetch and import",
+  "type": "ui_qml",
+  "category": "ui",
+  "main": "osm_app_plugin",
+  "view": "qml/Main.qml",
+  "icon": "src/icons/icon.png",
+  "dependencies": [
+    "osm"
+  ],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

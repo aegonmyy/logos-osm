@@ -1,0 +1,25 @@
+// RemoteObjects source definition for the OSM Basecamp view.
+//
+// The app is a thin replica: it forwards every OSM operation to the core
+// `osm` module (which dlopens liblogos_osm.so and runs the Rust SDK) over
+// RemoteObjects, and surfaces the JSON result to QML. QML parses the JSON;
+// the props here are just the last result/error for convenience binding.
+class OsmApp
+{
+    // The OSM core version JSON (from the core module's health/version).
+    PROP(QString osmVersion READWRITE)
+
+    // Last operation result JSON (the body of an invokeOp call).
+    PROP(QString lastResult READWRITE)
+
+    // Last error message (empty on success).
+    PROP(QString lastErr READWRITE)
+
+    // Re-read the OSM core version.
+    SLOT(void refresh())
+
+    // Invoke an OSM operation by name with JSON arguments; returns the JSON
+    // result. Operations: open, status, regions, discover, host, host_bulk,
+    // register, register_bulk, init, fetch, import, update, catalog.
+    SLOT(QString invokeOp(QString name, QString argsJson))
+}

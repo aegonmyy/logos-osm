@@ -114,7 +114,10 @@ pub fn parse_index(body: &str) -> Result<Vec<IndexEntry>> {
 pub fn match_region(entries: &[IndexEntry], region: &Region) -> Result<Option<IndexEntry>> {
     let source = region.source_url();
     // 1. URL join (authoritative when the entry publishes one).
-    if let Some(e) = entries.iter().find(|e| e.pbf_url.as_deref() == Some(source.as_str())) {
+    if let Some(e) = entries
+        .iter()
+        .find(|e| e.pbf_url.as_deref() == Some(source.as_str()))
+    {
         return Ok(Some(e.clone()));
     }
     // 2. Id join, only for URL-less entries. A URL-bearing entry with the
@@ -180,11 +183,30 @@ impl GeofabrikClient {
         }
     }
 
+    /// Map a canonical table URL onto this client's base (mirror override).
+    ///
+    /// Region URLs from the frozen table are absolute `download.geofabrik.de`
+    /// links (that absolute form is the join key against the live index and
+    /// must not change). When the client points at a mirror/fixture, the
+    /// canonical host is swapped for the base, keeping the path — so a
+    /// fixture at `http://127.0.0.1:PORT` serves the same
+    /// `/{path}-latest.osm.pbf` layout Geofabrik does.
+    fn mirror(&self, url: &str) -> String {
+        if self.base == DEFAULT_BASE {
+            url.to_string()
+        } else {
+            url.replacen(DEFAULT_BASE, &self.base, 1)
+        }
+    }
+
     async fn get_text(&self, url: &str) -> Result<String> {
         retry_transient(|| async {
-            let resp = self.http.get(url).send().await.map_err(|e| {
-                RetryErr::Transient(anyhow::anyhow!("GET {url}: {e}"))
-            })?;
+            let resp = self
+                .http
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| RetryErr::Transient(anyhow::anyhow!("GET {url}: {e}")))?;
             let status = resp.status();
             if !status.is_success() {
                 let err = anyhow::anyhow!("GET {url}: {status}");
@@ -232,7 +254,7 @@ impl GeofabrikClient {
     /// `.md5` response). Returns an error if neither carries a date — the
     /// registry keys freshness on this field.
     pub async fn fetch_md5(&self, region: &Region) -> Result<ChecksumFile> {
-        let url = region.checksum_url();
+        let url = self.mirror(&region.checksum_url());
         let (body, derived) = retry_transient(|| async {
             let resp = self
                 .http
@@ -288,7 +310,7 @@ impl GeofabrikClient {
     /// the future stays retryable without threading a callback through the
     /// retry closure.
     pub async fn download(&self, region: &Region, dest: &Path) -> Result<DownloadOutcome> {
-        let url = region.source_url();
+        let url = self.mirror(&region.source_url());
         retry_transient(|| async {
             let resp = self
                 .http
@@ -317,10 +339,9 @@ impl GeofabrikClient {
                 let chunk: Bytes =
                     chunk.map_err(|e| RetryErr::Transient(anyhow::anyhow!("stream {url}: {e}")))?;
                 hasher.update(&chunk);
-                writer
-                    .write_all(&chunk)
-                    .await
-                    .map_err(|e| RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display())))?;
+                writer.write_all(&chunk).await.map_err(|e| {
+                    RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display()))
+                })?;
                 if hasher.len() - last_report >= 64 << 20 {
                     last_report = hasher.len();
                     tracing::info!(
@@ -372,7 +393,10 @@ pub fn regions_from_index(entries: &[IndexEntry]) -> Result<Vec<RegionInfo>> {
 }
 
 /// [`regions_from_index`] for one region.
-pub fn region_info_from_index(entries: &[IndexEntry], region: &'static Region) -> Result<RegionInfo> {
+pub fn region_info_from_index(
+    entries: &[IndexEntry],
+    region: &'static Region,
+) -> Result<RegionInfo> {
     match match_region(entries, region)? {
         Some(e) => Ok(RegionInfo {
             region,
@@ -439,7 +463,11 @@ mod tests {
         assert_eq!(entries.len(), 5);
         assert_eq!(entries[0].id, "kenya");
         assert_eq!(entries[0].parent.as_deref(), Some("africa"));
-        assert!(entries[0].pbf_url.as_deref().unwrap().contains("kenya-latest.osm.pbf"));
+        assert!(entries[0]
+            .pbf_url
+            .as_deref()
+            .unwrap()
+            .contains("kenya-latest.osm.pbf"));
         // Unknown/extra properties are tolerated.
         assert_eq!(entries[2].id, "us/california");
     }
@@ -448,10 +476,14 @@ mod tests {
     fn joins_path_and_basename_shapes() {
         let entries = fixture_entries();
         // Plain country.
-        let m = match_region(&entries, by_path("germany").unwrap()).unwrap().unwrap();
+        let m = match_region(&entries, by_path("germany").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(m.id, "germany");
         // Nested US state.
-        let m = match_region(&entries, by_path("us/california").unwrap()).unwrap().unwrap();
+        let m = match_region(&entries, by_path("us/california").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(m.id, "us/california");
         // Russia district: table path russia/..., index id is the basename.
         let m = match_region(&entries, by_path("russia/central-fed-district").unwrap())
@@ -459,7 +491,9 @@ mod tests {
             .unwrap();
         assert_eq!(m.id, "central-fed-district");
         // Ireland's on-disk name differs from its path.
-        let m = match_region(&entries, by_path("ireland").unwrap()).unwrap().unwrap();
+        let m = match_region(&entries, by_path("ireland").unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(m.id, "ireland-and-northern-ireland");
     }
 
@@ -489,7 +523,10 @@ mod tests {
         assert!(msg.contains("france"), "{msg}");
         // And a single-region lookup of a present region works.
         let info = region_info_from_index(&entries, by_path("germany").unwrap()).unwrap();
-        assert_eq!(info.pbf_url, "https://download.geofabrik.de/europe/germany-latest.osm.pbf");
+        assert_eq!(
+            info.pbf_url,
+            "https://download.geofabrik.de/europe/germany-latest.osm.pbf"
+        );
     }
 
     #[tokio::test]
@@ -528,7 +565,28 @@ mod tests {
             md5.version,
             hex::encode(md5.checksum)
         );
-        let version = md5.version.expect("version resolved from body or X-Derived-From");
+        let version = md5
+            .version
+            .expect("version resolved from body or X-Derived-From");
         assert!(version >= 20250101, "implausible version {version}");
+    }
+
+    #[test]
+    fn mirror_override_maps_host_not_path() {
+        let real = GeofabrikClient::new();
+        let fixture = GeofabrikClient::with_base("http://127.0.0.1:3917/");
+        let url = by_path("germany").unwrap().source_url();
+        // The real server is untouched; a mirror swaps only the host.
+        assert_eq!(real.mirror(&url), url);
+        assert_eq!(
+            fixture.mirror(&url),
+            "http://127.0.0.1:3917/europe/germany-latest.osm.pbf"
+        );
+        // A URL that is not a table URL passes through unchanged (no
+        // accidental rewrite of foreign hosts).
+        assert_eq!(
+            fixture.mirror("https://example.org/x.osm.pbf"),
+            "https://example.org/x.osm.pbf"
+        );
     }
 }

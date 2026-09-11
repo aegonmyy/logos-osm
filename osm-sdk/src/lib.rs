@@ -23,8 +23,11 @@
 //! Map data is public — nothing here encrypts; the integrity story is the
 //! Geofabrik-published MD5 recorded on-chain next to the storage CID.
 
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the C-ABI boundary in `ffi` — the one place that
+// must touch raw pointers — can allow it locally with justification.
+#![deny(unsafe_code)]
 
+pub mod ffi;
 pub mod geofabrik;
 pub mod osm;
 pub mod regions;

@@ -155,9 +155,9 @@ impl Storage for CodexStorage {
         // A retried upload re-opens the file and restarts the body from the
         // beginning, so the stream is built inside the retry closure.
         let cid = retry_transient(|| async {
-            let file = tokio::fs::File::open(path).await.map_err(|e| {
-                RetryErr::Fatal(anyhow::anyhow!("open {}: {e}", path.display()))
-            })?;
+            let file = tokio::fs::File::open(path)
+                .await
+                .map_err(|e| RetryErr::Fatal(anyhow::anyhow!("open {}: {e}", path.display())))?;
             let stream = ReaderStream::with_capacity(file, 1 << 20);
             let resp = self
                 .http
@@ -182,9 +182,7 @@ impl Storage for CodexStorage {
             resp.text()
                 .await
                 .map(|t| t.trim().trim_matches('"').to_owned())
-                .map_err(|e| {
-                    RetryErr::Transient(anyhow::anyhow!("reading codex put body: {e}"))
-                })
+                .map_err(|e| RetryErr::Transient(anyhow::anyhow!("reading codex put body: {e}")))
         })
         .await?;
         Ok(StoredObject { cid, bytes: len })
@@ -204,8 +202,8 @@ impl Storage for CodexStorage {
                 .map_err(|e| RetryErr::Transient(anyhow::anyhow!("GET codex data: {e}")))?;
             let status = resp.status();
             if !status.is_success() {
-                let transient = crate::retry::status_is_transient(status.as_u16())
-                    || status.as_u16() == 404;
+                let transient =
+                    crate::retry::status_is_transient(status.as_u16()) || status.as_u16() == 404;
                 let err = anyhow::anyhow!("codex get failed: {status}");
                 return Err(if transient {
                     RetryErr::Transient(err)
@@ -250,12 +248,9 @@ impl Storage for CodexStorage {
                 let chunk: Bytes =
                     chunk.map_err(|e| RetryErr::Transient(anyhow::anyhow!("stream {url}: {e}")))?;
                 hasher.update(&chunk);
-                writer
-                    .write_all(&chunk)
-                    .await
-                    .map_err(|e| {
-                        RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display()))
-                    })?;
+                writer.write_all(&chunk).await.map_err(|e| {
+                    RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display()))
+                })?;
             }
             writer
                 .flush()
@@ -297,10 +292,7 @@ impl Storage for MemoryStorage {
     async fn put_bytes(&self, data: Bytes) -> Result<StoredObject> {
         use sha2::{Digest, Sha256};
         let cid = hex::encode(Sha256::digest(&data));
-        self.inner
-            .lock()
-            .unwrap()
-            .insert(cid.clone(), data.clone());
+        self.inner.lock().unwrap().insert(cid.clone(), data.clone());
         Ok(StoredObject {
             cid,
             bytes: data.len() as u64,
@@ -325,7 +317,10 @@ mod tests {
     async fn memory_roundtrip() {
         let s = MemoryStorage::new();
         assert!(s.is_empty());
-        let stored = s.put_bytes(Bytes::from_static(b"osm pbf bytes")).await.unwrap();
+        let stored = s
+            .put_bytes(Bytes::from_static(b"osm pbf bytes"))
+            .await
+            .unwrap();
         assert_eq!(s.len(), 1);
         let back = s.get_bytes(&stored.cid).await.unwrap();
         assert_eq!(&back[..], b"osm pbf bytes");
@@ -343,7 +338,10 @@ mod tests {
             .unwrap();
         let out = s.get_to_file(&stored.cid, &dest).await.unwrap();
         assert_eq!(out.bytes, 19);
-        assert_eq!(hex::encode(out.md5), hex::encode(crate::verify::md5_bytes(b"the quick brown fox")));
+        assert_eq!(
+            hex::encode(out.md5),
+            hex::encode(crate::verify::md5_bytes(b"the quick brown fox"))
+        );
         assert_eq!(std::fs::read(&dest).unwrap(), b"the quick brown fox");
     }
 

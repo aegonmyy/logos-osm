@@ -142,19 +142,9 @@ pub const REGIONS: &[Region] = &[
     country!("italy", "Italy", "Europe", "europe/italy"),
     country!("spain", "Spain", "Europe", "europe/spain"),
     country!("poland", "Poland", "Europe", "europe/poland"),
-    country!(
-        "netherlands",
-        "Netherlands",
-        "Europe",
-        "europe/netherlands"
-    ),
+    country!("netherlands", "Netherlands", "Europe", "europe/netherlands"),
     country!("belgium", "Belgium", "Europe", "europe/belgium"),
-    country!(
-        "switzerland",
-        "Switzerland",
-        "Europe",
-        "europe/switzerland"
-    ),
+    country!("switzerland", "Switzerland", "Europe", "europe/switzerland"),
     country!("austria", "Austria", "Europe", "europe/austria"),
     country!(
         "czech-republic",
@@ -223,7 +213,12 @@ pub const REGIONS: &[Region] = &[
     country!("peru", "Peru", "South America", "south-america/peru"),
     country!("chile", "Chile", "South America", "south-america/chile"),
     // Africa (country level)
-    country!("south-africa", "South Africa", "Africa", "africa/south-africa"),
+    country!(
+        "south-africa",
+        "South Africa",
+        "Africa",
+        "africa/south-africa"
+    ),
     country!("egypt", "Egypt", "Africa", "africa/egypt"),
     country!("nigeria", "Nigeria", "Africa", "africa/nigeria"),
     country!("kenya", "Kenya", "Africa", "africa/kenya"),
@@ -416,7 +411,10 @@ pub fn by_path(path: &str) -> Option<&'static Region> {
 /// All regions whose parent is `parent` (empty for a path with no children in
 /// the set).
 pub fn children_of(parent: &str) -> Vec<&'static Region> {
-    REGIONS.iter().filter(|r| r.parent == Some(parent)).collect()
+    REGIONS
+        .iter()
+        .filter(|r| r.parent == Some(parent))
+        .collect()
 }
 
 /// All regions at the given level.

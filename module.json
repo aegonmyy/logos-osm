@@ -1,0 +1,35 @@
+{
+  "name": "logos-osm",
+  "version": "0.1.0",
+  "description": "OpenStreetMap distribution on Logos: Geofabrik discovery, MD5-verified hosting to Logos Storage, the LEZ region registry, and a Basecamp host/consumer app.",
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/aegonmyy/logos-osm",
+  "components": [
+    {
+      "name": "osm",
+      "type": "core",
+      "path": "module",
+      "metadata": "module/metadata.json",
+      "main": "osm_plugin",
+      "description": "Headless OSM runtime module loaded by Logos Core (Qt plugin over FFI to the Rust SDK)."
+    },
+    {
+      "name": "osm_app",
+      "type": "ui_qml",
+      "path": "app",
+      "metadata": "app/metadata.json",
+      "main": "osm_app_plugin",
+      "view": "app/src/qml/Main.qml",
+      "dependencies": ["osm"],
+      "description": "Basecamp mini-app: host/registrar flow (discover, host, registration transactions) and consumer flow (fetch, verify, import, update check)."
+    }
+  ],
+  "build": {
+    "core": "nix build .#osm-install",
+    "app": "nix build .#osm-app-install",
+    "core_bundle": "nix build .#osm-lgx",
+    "app_bundle": "nix build .#osm-app-lgx",
+    "ffi": "./scripts/build-ffi.sh",
+    "downloadables": "./scripts/package-basecamp.sh"
+  }
+}

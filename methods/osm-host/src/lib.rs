@@ -57,7 +57,8 @@ pub const REGISTRY_SEED: [u8; 32] = *b"/OSM/REGISTRY/V1/SEED/0000000000";
 mod tests {
     /// The program id documented in README.md / docs/CU_COSTS.md / STATE.md
     /// and asserted by the public-testnet lifecycle test.
-    const DOCUMENTED_ID_HEX: &str = "e9904867aa99c039d62e12d837697e1f5bd84e8bfe972fa1d6ad75910304072d";
+    const DOCUMENTED_ID_HEX: &str =
+        "77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0";
 
     #[test]
     fn program_id_is_stable_and_documented() {
@@ -82,9 +83,6 @@ mod tests {
     #[test]
     fn registry_seed_matches_guest_constant() {
         // The guest pins the same bytes; keep the two in lockstep.
-        assert_eq!(
-            super::REGISTRY_SEED,
-            *b"/OSM/REGISTRY/V1/SEED/0000000000"
-        );
+        assert_eq!(super::REGISTRY_SEED, *b"/OSM/REGISTRY/V1/SEED/0000000000");
     }
 }

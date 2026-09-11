@@ -1,0 +1,81 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.32s
+     Running tests/osm_registry_live.rs (target/debug/deps/osm_registry_live-0b35dd5e773ed0f1)
+
+running 1 test
+test osm_registry_full_lifecycle_on_sequencer ... [2026-08-22T10:28:05Z ERROR indexer_core] Failed to start zone-sdk next_messages stream: HTTP error: error sending request for url (http://127.0.0.1:32807/cryptarchia/info)
+Statistics not found, choosing empty
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Latest block is 12
+Syncing to block 12. Blocks to sync: 12
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 12 in 1.124845464s
+Transaction hash is ea6ac729f45586af54ed1a73c8008211f25d850db50723fe820f2723d7021f51
+Transaction is included in block 13
+Transaction data is ProgramDeployment(ProgramDeploymentTransaction { message: Message { bytecode: <471820 bytes> } })
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored statistics at /tmp/.tmp2BydY5/metrics.json
+Latest block is 14
+Syncing to block 14. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 14 in 1.597849794s
+Generated new account with account_id Public/AmiWcv3u6RERYUpA5QfAortNmpJXATPuT4m8LQVxF372 at path /0
+With pk 5f2326b0d5098643bd0f1a5c638967b22d6c695465c792ea335feae866009989
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored statistics at /tmp/.tmp2BydY5/metrics.json
+Generated new account with account_id Public/9i4pP9GZSaRkRRxxBVDZ8F5fBs3NHA2pLRq1vQVRL5tm at path /1
+With pk 019dc487e647a373be877b656e29cc54ed5f218b89d623b6d648154f6fdcf3b8
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored statistics at /tmp/.tmp2BydY5/metrics.json
+Generated new account with account_id Public/A1wmvuMNZNVhQYQfSGaKUcEu483cpeDoe91SkE6Xo6mV at path /0/0
+With pk b7ab641b8d01bb3c25c62190730da047dc2dca54df7fea4bd92c972d785baf86
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored statistics at /tmp/.tmp2BydY5/metrics.json
+Generated new account with account_id Public/3w5rvE2HGMTVZPUhBFmpV1fZRywo4GK1LRqsb48FR3Rf at path /2
+With pk 4778da095ed7bf7cb5e06b57501999cfdfd9b0138158dd8c38f1bcc924c3ab8d
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored statistics at /tmp/.tmp2BydY5/metrics.json
+Latest block is 15
+Syncing to block 15. Blocks to sync: 1
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 15 in 78.321781ms
+Latest block is 17
+Syncing to block 17. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 17 in 2.0824032s
+Latest block is 19
+Syncing to block 19. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 19 in 876.397299ms
+Latest block is 21
+Syncing to block 21. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 21 in 158.499512ms
+Latest block is 23
+Syncing to block 23. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 23 in 309.735605ms
+Latest block is 25
+Syncing to block 25. Blocks to sync: 2
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Stored persistent accounts at /tmp/.tmp2BydY5/storage.json
+Synced to block 25 in 1.917775989s
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1013.99s
+

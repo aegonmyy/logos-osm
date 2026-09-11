@@ -145,17 +145,12 @@ fn execute(
 
         Instruction::RegisterRegion { registration } => {
             let [reg, region, registrar] = exactly(pre_states);
-            let (reg_acc, entry_acc) = apply_registration(
-                reg,
-                region,
-                registrar,
-                registration,
-                &self_program_id,
-            );
+            let (reg_acc, entry_acc) =
+                apply_registration(reg, region, registrar, registration, &self_program_id);
             vec![
                 AccountPostState::new(reg_acc),
                 entry_acc,
-                AccountPostState::new(registrar.account.clone()),
+                registrar_post_state(registrar),
             ]
         }
 
@@ -181,18 +176,40 @@ fn execute(
 
             let mut posts = Vec::with_capacity(n);
             for (r, region_pre) in registrations.iter().zip(pre_states[2..].iter()) {
-                posts.push(register_one(&mut registry, region_pre, registrar, r, &self_program_id));
+                posts.push(register_one(
+                    &mut registry,
+                    region_pre,
+                    registrar,
+                    r,
+                    &self_program_id,
+                ));
             }
             // The registry account post-state is written once, after the loop.
             let mut reg_out = reg.account.clone();
             reg_out.data = Data::try_from(borsh::to_vec(&registry).unwrap()).unwrap();
             let mut out = Vec::with_capacity(2 + n);
             out.push(AccountPostState::new(reg_out));
-            out.push(AccountPostState::new(registrar.account.clone()));
+            out.push(registrar_post_state(registrar));
             out.extend(posts);
             out
         }
     }
+}
+
+/// The registrar's post-state.
+///
+/// A registrar's **first** registration writes their still-default account,
+/// which is fine unclaimed — but the sequencer advances the signer's nonce on
+/// inclusion, so the account is non-default afterwards while its program
+/// owner is still default. A **subsequent** registration by the same signer
+/// (e.g. one region, then a batch) then fails execution validation with
+/// `NonDefaultAccountWithDefaultOwner` unless this program claims the
+/// account. Registration is permissionless and repeatable by design, so the
+/// signer is claimed with `Claim::Authorized` on first touch;
+/// `new_claimed_if_default` makes the claim idempotent (accounts this
+/// program already owns are written plainly).
+fn registrar_post_state(registrar: &AccountWithMetadata) -> AccountPostState {
+    AccountPostState::new_claimed_if_default(registrar.account.clone(), Claim::Authorized)
 }
 
 /// Shared registration path for both the scalar and batch instructions.
@@ -499,6 +516,57 @@ mod tests {
     }
 
     #[test]
+    fn registrar_claimed_on_first_touch_only() {
+        // Rule-7 reproduction at the pure-execute level: the FIRST
+        // registration of a still-default signer must request
+        // Claim::Authorized (after inclusion the signer's nonce makes them
+        // non-default, and an unclaimed re-registration would fail with
+        // `NonDefaultAccountWithDefaultOwner`); once this program already
+        // owns the account, the write is plain.
+        let reg = initialized_registry();
+        let r = region_account("germany");
+        let fresh = signer(REGISTRAR);
+        assert_eq!(
+            fresh.account.program_owner, [0; 8],
+            "precondition: first-time registrar is default"
+        );
+        let posts = execute(
+            PROG,
+            &[reg.clone(), r.clone(), fresh],
+            &Instruction::RegisterRegion {
+                registration: registration("germany", 100),
+            },
+        );
+        assert_eq!(
+            posts[2].required_claim(),
+            Some(Claim::Authorized),
+            "first registration must claim the signer"
+        );
+
+        // Second registration: program_owner non-default => plain write.
+        let mut owned = signer(REGISTRAR);
+        owned.account.program_owner = PROG;
+        let posts = execute(
+            PROG,
+            &[reg, r, owned],
+            &Instruction::RegisterRegion {
+                registration: RegionRegistration {
+                    region: "germany".into(),
+                    cid: "cid-v2".into(),
+                    checksum: [0xcd; 16],
+                    version: 20260601,
+                    timestamp: 200,
+                },
+            },
+        );
+        assert_eq!(
+            posts[2].required_claim(),
+            None,
+            "already-owned signer is written plainly"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "registrar must sign")]
     fn unsigned_registration_rejected() {
         let reg = initialized_registry();
@@ -607,6 +675,9 @@ mod tests {
         assert_eq!(entry.mirrors.len(), MAX_MIRRORS);
         // Oldest pruned; the latest is the newest registration.
         assert_eq!(entry.mirrors[0].timestamp, 4);
-        assert_eq!(entry.latest_mirror().unwrap().timestamp, MAX_MIRRORS as u64 + 3);
+        assert_eq!(
+            entry.latest_mirror().unwrap().timestamp,
+            MAX_MIRRORS as u64 + 3
+        );
     }
 }

@@ -57,7 +57,10 @@ pub fn registry_pda(program_id: &ProgramId) -> AccountId {
 /// The seed is `SHA-256("osm-region:" || path)` (see
 /// [`osm_core::region_seed`]) — the same derivation the guest asserts on.
 pub fn region_pda(program_id: &ProgramId, region_path: &str) -> AccountId {
-    AccountId::for_public_pda(program_id, &PdaSeed::new(osm_core::region_seed(region_path)))
+    AccountId::for_public_pda(
+        program_id,
+        &PdaSeed::new(osm_core::region_seed(region_path)),
+    )
 }
 
 /// An instruction plus the exact accounts the guest asserts on, ready for the
@@ -259,12 +262,7 @@ mod tests {
         // the guest's exact decode path).
         let back: Instruction =
             risc0_zkvm::serde::from_slice(&built.instruction).expect("decode init words");
-        assert_eq!(
-            back,
-            Instruction::Init {
-                owner: REGISTRAR
-            }
-        );
+        assert_eq!(back, Instruction::Init { owner: REGISTRAR });
     }
 
     #[test]
@@ -274,8 +272,7 @@ mod tests {
         assert_eq!(built.accounts[0], registry_pda(&PROG));
         assert_eq!(built.accounts[1], region_pda(&PROG, "germany"));
         assert_eq!(built.accounts[2], registrar());
-        let back: Instruction =
-            risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
+        let back: Instruction = risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
         assert_eq!(
             back,
             Instruction::RegisterRegion {
@@ -296,8 +293,7 @@ mod tests {
         for (i, r) in regs.iter().enumerate() {
             assert_eq!(built.accounts[2 + i], region_pda(&PROG, &r.region));
         }
-        let back: Instruction =
-            risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
+        let back: Instruction = risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
         match back {
             Instruction::RegisterRegionsBatch { registrations } => {
                 assert_eq!(registrations, regs);

@@ -1,5 +1,8 @@
 /target
-/result
+/result*
 *.so
 *.lgx
 osm-cache/
+osm-state.json
+osm-perf/
+/dist

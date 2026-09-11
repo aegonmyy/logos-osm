@@ -146,9 +146,7 @@ pub enum Instruction {
     ///
     /// Accounts (pre_states): `[registry, region_account, registrar_signer]`.
     /// The region account must be the PDA seeded by `SHA-256(region_path)`.
-    RegisterRegion {
-        registration: RegionRegistration,
-    },
+    RegisterRegion { registration: RegionRegistration },
     /// Register many regions in one transaction (bulk hosting).
     ///
     /// Accounts (pre_states): `[registry, registrar_signer, region_0, ...]`,

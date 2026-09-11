@@ -199,7 +199,10 @@ mod tests {
         // X-Derived-From.
         let f = parse_md5("4774b0fee4d1a66c1552e55d4dc7a6cf  kenya-latest.osm.pbf").unwrap();
         assert_eq!(f.version, None);
-        assert_eq!(f.checksum, decode_md5_hex("4774b0fee4d1a66c1552e55d4dc7a6cf").unwrap());
+        assert_eq!(
+            f.checksum,
+            decode_md5_hex("4774b0fee4d1a66c1552e55d4dc7a6cf").unwrap()
+        );
     }
 
     #[test]
@@ -215,16 +218,22 @@ mod tests {
             version_from_derived_from("europe/germany-260524.osm.pbf"),
             Some(20260524)
         );
-        assert_eq!(version_from_derived_from("germany-260524.osm.pbf"), Some(20260524));
+        assert_eq!(
+            version_from_derived_from("germany-260524.osm.pbf"),
+            Some(20260524)
+        );
         // Absent/undated headers are None, not errors.
         assert_eq!(version_from_derived_from(""), None);
-        assert_eq!(version_from_derived_from("africa/kenya-latest.osm.pbf.md5"), None);
+        assert_eq!(
+            version_from_derived_from("africa/kenya-latest.osm.pbf.md5"),
+            None
+        );
     }
 
     #[test]
     fn parses_newlineless_body() {
-        let f = parse_md5("d41d8cd98f00b204e9800998ecf8427e  us/california-260810.osm.pbf")
-            .unwrap();
+        let f =
+            parse_md5("d41d8cd98f00b204e9800998ecf8427e  us/california-260810.osm.pbf").unwrap();
         assert_eq!(f.version, Some(20260810));
     }
 
@@ -267,6 +276,9 @@ mod tests {
     #[test]
     fn version_handles_single_digit_segments() {
         // Geofabrik zero-pads, but a defensive parse of 260101 works.
-        assert_eq!(version_from_filename("kenya-260101.osm.pbf").unwrap(), 20260101);
+        assert_eq!(
+            version_from_filename("kenya-260101.osm.pbf").unwrap(),
+            20260101
+        );
     }
 }

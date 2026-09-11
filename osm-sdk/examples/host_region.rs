@@ -15,8 +15,9 @@ use logos_osm::OsmClient;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let region = std::env::args().nth(1).unwrap_or_else(|| "kenya".into());
-    let storage_url =
-        std::env::args().nth(2).unwrap_or_else(|| "http://127.0.0.1:8080".into());
+    let storage_url = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "http://127.0.0.1:8080".into());
 
     let client = OsmClient::new(CodexStorage::new(storage_url), "osm-cache");
     let snap = client.host_region(&region).await?;
@@ -31,9 +32,11 @@ async fn main() -> anyhow::Result<()> {
 
     // The registration tx for this snapshot (the wallet submits it).
     let program_id = osm_registry::osm_registry_id();
-    let registrar =
-        lee_core::account::AccountId::new([0x11; 32]); // demo registrar
+    let registrar = lee_core::account::AccountId::new([0x11; 32]); // demo registrar
     let built = build_register_region(&program_id, &registrar, &snap.registration(None));
-    println!("tx words : {} u32 instruction words", built.instruction.len());
+    println!(
+        "tx words : {} u32 instruction words",
+        built.instruction.len()
+    );
     Ok(())
 }
