@@ -10,19 +10,25 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RISC0_DEV_MODE: "1"
+  CARGO_BUILD_JOBS: "2"
 
 jobs:
   unit-tests:
     name: Build + unit tests
-    runs-on: ubuntu-22.04
+    # Self-hosted runner on the logos-box (this account's hosted-runner jobs
+    # are blocked by a billing gate, and self-hosted runners are free).
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Free runner disk space
         # The wallet stack's librocksdb-sys + the risc0 toolchain + the
-        # workspace target dir overflow the runner's ~14 GB free disk
+        # workspace target dir overflow a hosted runner's ~14 GB free disk
         # (observed on the sibling vault repo: cc-rs "No space left on
-        # device" while archiving librocksdb.a). Reclaim the preinstalled
-        # SDKs this repo never uses.
+        # device" while archiving librocksdb.a). Self-hosted box: ample disk.
         run: |
+          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
+            echo "self-hosted runner: skipping disk reclamation"
+            exit 0
+          fi
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -39,6 +45,8 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install system deps
+        # Already present on the self-hosted box; skip the apt update there.
+        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -77,7 +85,7 @@ jobs:
 
   live-e2e:
     name: Live LEZ e2e (Docker sequencer + real Codex)
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, Linux, X64]
     # The full registry lifecycle against a standalone LEZ sequencer brought
     # up by test_fixtures::TestContext (heavy, ~5-6 min) plus the off-chain
     # lifecycle against a real Codex storage container.
@@ -85,8 +93,12 @@ jobs:
       - name: Free runner disk space
         # Same exhaustion as the unit job: at 85 MB free the Docker
         # sequencer's funding backend 500s ("Requested wallet state for
-        # unknown block") and txs never get included.
+        # unknown block") and txs never get included. Self-hosted: skip.
         run: |
+          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
+            echo "self-hosted runner: skipping disk reclamation"
+            exit 0
+          fi
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -103,6 +115,10 @@ jobs:
           toolchain: 1.94.0
 
       - name: Install risc0 toolchain
+        # The self-hosted box already has cargo-risczero 3.0.5 / r0vm 3.0.5 /
+        # rust 1.97.0 installed (it is the logos-agent build box); skip the
+        # download there.
+        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
         run: |
           curl -L https://risczero.com/install | bash
           export PATH="$HOME/.risc0/bin:$PATH"
@@ -121,6 +137,7 @@ jobs:
           echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
 
       - name: Install system deps
+        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -130,21 +147,27 @@ jobs:
           cargo test -p osm-integration-tests --test osm_registry_live -- --ignored --nocapture --test-threads=1
 
       - name: Off-chain E2E on real Codex storage
-        # Brings up the real Logos Storage node in a container and runs the
-        # full host->store->fetch->import flow against it (not in-memory).
-        # The node takes ~1-2 min to bootstrap past port-bind; wait for the
-        # list endpoint to answer 200 (the test also retries its probe).
+        # Runs the full host->store->fetch->import flow against a real Logos
+        # Storage node (not in-memory). On the shared self-hosted box a Codex
+        # node may already be listening on :8080 (the 'vault-codex' container
+        # is a shared resource) — reuse it when it answers, otherwise start a
+        # fresh 'osm-codex'.
         run: |
           set -e
-          # Digest-pinned (content address) + entrypoint override: the image's
-          # default config is broken upstream — ENTRYPOINT /docker-entrypoint.sh
-          # with CMD ["codex"], but no `codex` binary exists (the binary is
-          # /usr/local/bin/storage), so a plain `docker run` always dies with
-          # "exec: codex: not found".
-          docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
-            --entrypoint /usr/local/bin/storage \
-            codexstorage/nim-codex@sha256:25d9409b591da37200896e68fd9e4c591566f1ad0a80c0633c6cd5011ae56edb \
-            --api-bindaddr=0.0.0.0 --api-port=8080
+          if curl -s -o /dev/null --max-time 3 "http://127.0.0.1:8080/api/storage/v1/data"; then
+            echo "reusing existing codex on :8080"
+          else
+            # Digest-pinned (content address) + entrypoint override: the image's
+            # default config is broken upstream — ENTRYPOINT /docker-entrypoint.sh
+            # with CMD ["codex"], but no `codex` binary exists (the binary is
+            # /usr/local/bin/storage), so a plain `docker run` always dies with
+            # "exec: codex: not found".
+            docker rm -f osm-codex 2>/dev/null || true
+            docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
+              --entrypoint /usr/local/bin/storage \
+              codexstorage/nim-codex@sha256:25d9409b591da37200896e68fd9e4c591566f1ad0a80c0633c6cd5011ae56edb \
+              --api-bindaddr=0.0.0.0 --api-port=8080
+          fi
           ready=""
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -158,12 +181,16 @@ jobs:
 
   cycle-profile:
     name: CU cycle profile (local executor)
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, Linux, X64]
     # Real per-instruction guest cycle counts through the risc0 local
     # executor — the numbers behind docs/CU_COSTS.md (single vs batch).
     steps:
       - name: Free runner disk space
         run: |
+          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
+            echo "self-hosted runner: skipping disk reclamation"
+            exit 0
+          fi
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -179,6 +206,7 @@ jobs:
           toolchain: 1.94.0
 
       - name: Install system deps
+        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -190,13 +218,18 @@ jobs:
   lgx-bundles:
     name: .lgx bundles build + are callable
     # The nix-built plugin .so links against a newer glibc than ubuntu-22.04
-    # ships (2.35); the smoke dlopens it, so run on 24.04 (glibc 2.39 >= 2.38).
-    runs-on: ubuntu-24.04
+    # ships (2.35); the smoke dlopens it, so it needs glibc >= 2.38. The
+    # self-hosted box is Ubuntu 26.04 with glibc 2.43, so it qualifies.
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Free runner disk space
         # The nix store (Qt toolchain + module deps) grows into the same
-        # ~14 GB the runner offers; reclaim the unused preinstalled SDKs.
+        # ~14 GB a hosted runner offers; self-hosted box has ample disk.
         run: |
+          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
+            echo "self-hosted runner: skipping disk reclamation"
+            exit 0
+          fi
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -206,8 +239,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install nix
-        uses: DeterminateSystems/nix-installer-action@v16
+      - name: Ensure nix is available
+        run: |
+          if command -v nix >/dev/null 2>&1; then
+            echo "nix present: $(nix --version)"
+          else
+            echo "::error::nix not found on the self-hosted runner"
+            exit 1
+          fi
 
       - name: Build core + app .lgx bundles
         run: nix build .#osm-lgx .#osm-app-lgx --print-out-paths
