@@ -1,7 +1,51 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> Last updated: 2026-08-22, 14:3x (by Claude — ALL GREEN: public testnet lifecycle + all 4 CI jobs on main). Only user-only steps remain.
+> Last updated: **2026-08-28** (by Claude — handoff refresh; see the next
+> section). Earlier: 2026-08-22 ALL GREEN: public testnet lifecycle + all 4
+> CI jobs on main. Only user-only steps remain.
+
+## 🤝 STATE AT HANDOFF (2026-08-28) — read this first
+
+**Everything needed is on `main`, verified against the remote:**
+
+- Local `main` `a8840f9` == remote `main` (`aegonmyy/logos-osm`), working
+  tree clean. CI **all 4 jobs GREEN** at the tip (`a8840f9ad`, plus the prior
+  tip `1599b61bf` — both `completed/success`).
+- Tip = demo-evidence commit (asciinema cast). Last functional state: CI
+  4/4 on run 32576280128; adversarial review passed with all 6 Low findings
+  fixed (see milestone below).
+- Contest scene: the LP-0018 prize PR (`logos-co/lambda-prize#75`, weboko)
+  is **still unmerged**; a third-party submission in this same lane
+  (mart1n-xyz, #71, updated 2026-08-27) is active. Our solution PR is
+  **not opened** (user-only, when #75 merges).
+
+**If you are a successor agent, the rules that keep this repo shippable:**
+
+1. **NEVER commit `tests/tests/adoption.rs`.** It is an operator tool kept
+   out of the tree on purpose via `.git/info/exclude` (that file is local —
+   a fresh clone won't have it; on this VPS it's already excluded). Its ops
+   docs and ledger live in the private repo `aegonmyy/osm-adoption`
+   (checkout at `~/osm-adoption-campaign/`; read its `STATE.md` first).
+2. `~/logos-agent` is read-only (another agent owns it). `~/logos-vault` is
+   a sibling hedge (read for patterns, don't mix histories).
+3. Before any push: `cargo fmt --all -- --check` AND
+   `cargo clippy --workspace --exclude osm-guest-builder --all-targets` AND
+   compile every `--test` target locally — CI enforces all three and this
+   machine's default `cargo test` invocation does NOT build test targets.
+4. Push flow (scrub after every use):
+   `TOKEN='…'; git push "https://$TOKEN@github.com/aegonmyy/logos-osm.git" HEAD:main`
+   then verify `git remote -v | grep -c ghp_` = 0. Token is user-rotating.
+5. Never add Claude as co-author on commits.
+6. The committed artifact `methods/osm-host/osm_registry.bin` is the
+   authority for the deployed program id `77ecdf2f…`; do not rebuild/re-pin
+   casually (guest builds are not byte-reproducible — see honesty ledger).
+
+**What remains is user-only:** narrated-video voiceover over the committed
+cast, filing GitHub issues, opening the solution PR (and, on the campaign
+side, whatever the user's redesign decides — see the private repo's STATE.md).
+Agent-side work is complete unless the prize scene moves (competitor
+activity, testnet reset, or #75 merging and surfacing new requirements).
 
 ## Mission
 
