@@ -47,6 +47,53 @@ side, whatever the user's redesign decides — see the private repo's STATE.md).
 Agent-side work is complete unless the prize scene moves (competitor
 activity, testnet reset, or #75 merging and surfacing new requirements).
 
+## ⚙️ CI infrastructure change (2026-08-28) — self-hosted runners
+
+**What broke:** at 2026-08-28T02:00Z all 4 CI jobs on `main` failed
+instantly with no logs. The check-run annotation read: "The job was not
+started because recent account payments have failed or your spending limit
+needs to be increased." This is a GitHub **account-level billing gate** on
+hosted runners for private repos, not a code problem. Every job had
+`runner_id: 0` (never picked up). Prior green run: 32595305722 (2026-08-22).
+Identical failure hit the sibling `logos-vault` at the same minute; both
+were fixed the same way.
+
+**Fix:** self-hosted runners on the logos-box VPS are free and not gated by
+hosted-runner billing. Two dedicated runners were registered (one per hedge
+repo) and CI switched off hosted runners:
+
+- Runner install: `/home/ubuntu/actions-runner-osm`, GitHub Actions Runner
+  v2.337.0, name `logos-box-osm`. (Sibling: `logos-box-vault`.)
+- systemd service: `actions.runner.aegonmyy-logos-osm.logos-box-osm.service`.
+- The runner exports its PATH from a `.path` file:
+  `/home/ubuntu/actions-runner-osm/.path` includes `~/.cargo/bin`,
+  `~/.risc0/bin` (cargo-risczero 3.0.5 / r0vm 3.0.5 / rust 1.97.0) and
+  `/nix/var/nix/profiles/default/bin` (nix). This is what makes the risc0
+  toolchain and nix visible to the CI jobs. If a runner is ever re-registered,
+  re-create that `.path`.
+
+**Workflow changes (`.github/workflows/ci.yml`, commit `012a5cb`):**
+- All 4 jobs now `runs-on: [self-hosted, Linux, X64]`.
+- `CARGO_BUILD_JOBS: "2"` in the env block (the box is shared; cap build
+  parallelism to keep load sane).
+- Hosted-only steps are guarded with `if: env.RUNNER_IS_GITHUB_HOSTED ==
+  'true'` (set on GitHub-hosted runners, unset on self-hosted): disk
+  reclamation (self-hosted skips and returns 0), `Install system deps` (apt),
+  `Install risc0 toolchain` (the box already has it).
+- `Install nix` (DeterminateSystems/nix-installer-action) replaced with an
+  availability check that errors if nix is missing.
+- Off-chain Codex step now **reuses a live codex on :8080** when present
+  (`vault-codex` is a shared box resource) instead of always starting a new
+  container, which would collide on the port.
+- Digest-pinned images and the Codex `--entrypoint /usr/local/bin/storage`
+  override are preserved.
+
+**How to run CI locally (same as the runner):** the runner jobs use the box's
+installed toolchains; the box is the logos-agent build box, so
+`cargo-risczero`/`r0vm`/`nix`/`protobuf-compiler`/`libpcsclite-dev` are all
+present. Runner service control: `sudo systemctl {start,stop,restart}
+actions.runner.aegonmyy-logos-osm.logos-box-osm.service`.
+
 ## Mission
 
 Build a complete LP-0018 PR #71 submission (the **OpenStreetMap integration
@@ -285,3 +332,31 @@ from the agent session, voiceover later):
   rebuild from current source would not be byte-identical (guest builds are
   not byte-reproducible anyway; the artifact is the authority, per the
   program-id pinning test). No redeploy needed or performed.
+
+## 2026-08-28 manager note (hedge CI) — UPDATED 04:20Z
+- ci.yml commit `012a5cb` ("run on self-hosted runners (logos-box) instead of
+  hosted") is committed on main, working tree clean, NOT yet pushed. YAML
+  validated locally.
+- Vault run 33137476969 reached **COMPLETED SUCCESS** (live-e2e + Build+unit
+  on the `-j2` cap). The vault hedge is green.
+- **OSM pushed 2026-08-28 05:14Z** — agent run 33141449968 went GREEN
+  (completed success on `4e6e3c5`, the cargo-churn fix), so the hold lifted.
+  OSM run **33144124163** on `012a5cb` is in flight (CU cycle profile started
+  on `logos-box-osm`; 4 jobs total). Verify it goes fully green.
+- **NEW root cause discovered 04:10Z (affects all three repos):** the three
+  self-hosted runners share ONE home dir (`/home/ubuntu`). Host-level
+  toolchain installs — `dtolnay/rust-toolchain` and `rzup install rust` (vault
+  ci.yml lines 99-124, osm ci.yml lines 112-137, both on the live-e2e jobs) —
+  churn the rustup shims in `/home/ubuntu/.cargo/bin`. Run concurrently with a
+  job mid-`cargo`, the shims break (observed twice: agent e2e "cargo: command
+  not found" at different steps). It even removed the `rustup` binary itself;
+  I reinstalled it via `sh.rustup.rs -y --no-modify-path` + `rustup default
+  1.94.0` (04:18Z, cargo 1.94.0 + rustc 1.94.0 verified). 
+- **Durable fix pattern** (applied to logos-agent e2e job, commit `4e6e3c5`):
+  prepend the real toolchain bin to PATH in the job
+  (`echo "$HOME/.rustup/toolchains/1.94.0-x86_64-unknown-linux-gnu/bin" >>
+  "$GITHUB_PATH"`) so cargo/rustc resolve to a real binary that rustup churn
+  does not touch. **Recommended for vault/osm live-e2e jobs too** (they run
+  rzup on the host): either the same PATH pin to their toolchain, or isolate
+  with per-runner `RUSTUP_HOME`/`CARGO_HOME`. Not yet done — flagged for the
+  next agent that touches those workflows.
