@@ -1,0 +1,24 @@
+{
+  "name": "osm",
+  "version": "1.0.0",
+  "description": "OpenStreetMap distribution core: Geofabrik discovery, MD5-verified hosting to Logos Storage, and the LEZ region-registry client.",
+  "type": "core",
+  "interface": "universal",
+  "category": "general",
+  "main": "osm_plugin",
+  "dependencies": [],
+  "capabilities": [],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": ["dl"]
+    }
+  }
+}
