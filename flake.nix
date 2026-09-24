@@ -8,12 +8,14 @@
 
   outputs = inputs@{ self, nixpkgs, logos-module-builder, ... }:
     let
-      # Match the module-builder's own system set (lib/common.nix `systems`)
-      # so the catalog release action's darwin-arm64 leg has a package to
-      # build. x86_64-windows is a cross pseudo-system the builder realises
-      # only when logos-nix is an input; it is intentionally absent here, so
-      # the windows leg fails that variant alone (the action tolerates it).
-      supportedSystems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
+      # Match the module-builder's own system set (lib/common.nix `systems`),
+      # which adds "x86_64-windows" when logos-nix is available. The builder
+      # bakes its pinned logos-nix into `lib`, so mkLogosModule already
+      # produces a packages.x86_64-windows attribute (a mingw cross build
+      # realised on a Linux runner) — we just have to forward it here. This
+      # lets the catalog release action's windows-x86_64 leg find
+      # .#packages.x86_64-windows.lgx-portable.
+      supportedSystems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" "x86_64-windows" ];
 
       # The OSM core module. Its Rust core (liblogos_osm.so) is built with
       # cargo and loaded at runtime via LOGOS_OSM_FFI_PATH. It depends on the
