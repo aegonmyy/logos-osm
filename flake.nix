@@ -8,7 +8,12 @@
 
   outputs = inputs@{ self, nixpkgs, logos-module-builder, ... }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      # Match the module-builder's own system set (lib/common.nix `systems`)
+      # so the catalog release action's darwin-arm64 leg has a package to
+      # build. x86_64-windows is a cross pseudo-system the builder realises
+      # only when logos-nix is an input; it is intentionally absent here, so
+      # the windows leg fails that variant alone (the action tolerates it).
+      supportedSystems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
 
       # The OSM core module. Its Rust core (liblogos_osm.so) is built with
       # cargo and loaded at runtime via LOGOS_OSM_FFI_PATH. It depends on the
@@ -35,7 +40,16 @@
           prefix = tag: set:
             nixpkgs.lib.mapAttrs' (k: v: nixpkgs.lib.nameValuePair "${tag}-${k}" v) set;
         in
-          prefix "osm" osmPkgs // prefix "osm-app" appPkgs;
+          # Expose the core module's attributes UNDER THEIR BARE NAMES
+          # (lgx-portable, install, lgx, default) so the catalog release
+          # action's `nix build .#lgx-portable` resolves. The root
+          # metadata.json names this module "osm", and the action builds the
+          # attribute matching that name's builder output. Prefixing every
+          # output as osm-* (the old shape) hid lgx-portable behind
+          # osm-lgx-portable and broke all four build legs.
+          osmPkgs
+          // prefix "osm" osmPkgs
+          // prefix "osm-app" appPkgs;
     in {
       packages = nixpkgs.lib.genAttrs supportedSystems packagesFor;
     };

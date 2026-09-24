@@ -22,6 +22,7 @@
 //! `update`, `catalog`. Transactions come back as JSON for the wallet to
 //! submit — the FFI never signs or submits (same split as the CLI).
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
@@ -109,7 +110,16 @@ impl AppState {
     }
 }
 
-static STATE: Mutex<Option<AppState>> = Mutex::new(None);
+/// Per-session configuration. Logos Core loads multiple modules into one
+/// process, and each may call `open` with its own storage/cache config. A
+/// single global state meant the second `open` silently overwrote the first,
+/// so every op routed through whichever module opened last. Sessions fix
+/// that: `open` accepts a `"session"` id, every other op accepts the same
+/// optional id, and configs live side by side keyed by it. The C ABI is
+/// unchanged; callers that never pass a session id get the original
+/// single-state behavior (the most recently opened session).
+static SESSIONS: Mutex<Option<HashMap<String, AppState>>> = Mutex::new(None);
+static ACTIVE_SESSION: Mutex<String> = Mutex::new(String::new());
 
 fn rt() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -176,13 +186,57 @@ fn client(st: &AppState) -> OsmClient<AnyStorage> {
     OsmClient::new(storage, &st.cache_dir).with_geofabrik_base(&st.geofabrik_url)
 }
 
-/// Hold the state lock across a sync read/mutation, returning JSON.
-fn with_state<R>(f: impl FnOnce(&mut AppState) -> anyhow::Result<R>) -> *mut c_char
+/// Resolve the cache/state dir under the Logos data tree when the caller
+/// gives no explicit path. Logos ui-host processes export `LOGOS_USER_DIR`
+/// (the Basecamp per-user data root); defaulting there means a module that
+/// calls `open({})` no longer drops `osm-cache/` and `osm-state.json` into the
+/// host process's CWD. When the env var is unset (standalone CLI/tests), the
+/// original CWD-relative defaults apply so behavior is unchanged outside Logos.
+fn user_dir_base() -> Option<PathBuf> {
+    std::env::var_os("LOGOS_USER_DIR").map(PathBuf::from)
+}
+
+/// Resolve a path argument: explicit value wins, else `LOGOS_USER_DIR/<file>`,
+/// else the bare filename (CWD-relative, the historical default).
+fn resolve_path(explicit: Option<String>, default_file: &str) -> String {
+    if let Some(p) = explicit {
+        return p;
+    }
+    match user_dir_base() {
+        Some(base) => base.join(default_file).display().to_string(),
+        None => default_file.to_string(),
+    }
+}
+
+/// Resolve which session an op runs against: an explicit `"session"` arg
+/// wins, else the most recently opened session (the single-module default).
+/// Returns `None` when no session has been opened yet.
+fn resolve_session(args: &Value) -> Option<String> {
+    if let Some(s) = str_arg(args, "session") {
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    let active = ACTIVE_SESSION.lock().unwrap();
+    if active.is_empty() {
+        None
+    } else {
+        Some(active.clone())
+    }
+}
+
+/// Run `f` against the session named in `args` (or the active one), holding
+/// the sessions lock across the op.
+fn with_state<R>(args: &Value, f: impl FnOnce(&mut AppState) -> anyhow::Result<R>) -> *mut c_char
 where
     R: serde::Serialize,
 {
-    let mut guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_mut() else {
+    let Some(sid) = resolve_session(args) else {
+        return err("osm not open: call open first");
+    };
+    let mut guard = SESSIONS.lock().unwrap();
+    let sessions = guard.get_or_insert_with(HashMap::new);
+    let Some(st) = sessions.get_mut(&sid) else {
         return err("osm not open: call open first");
     };
     match f(st) {
@@ -190,6 +244,7 @@ where
         Err(e) => err(format!("{e:#}")),
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Transaction JSON (for the wallet to submit — mirrors the CLI's TxCmd)
@@ -251,6 +306,7 @@ fn tx_json(st: &AppState, built: &OsmTxBuilt, signer: &lee_core::account::Accoun
 fn region_json(r: &Region) -> Value {
     json!({
         "path": r.path,
+        "name": r.name,
         "continent": r.continent,
         "parent": r.parent,
         "level": match r.level { Level::Country => "country", Level::Subregion => "subregion" },
@@ -295,9 +351,13 @@ pub unsafe extern "C" fn logos_osm_invoke(
 
 fn dispatch(name: &str, args: &Value) -> *mut c_char {
     match name {
-        "version" => to_json(json!({"ok": true, "version": env!("CARGO_PKG_VERSION")})),
+        "version" => to_json(json!({
+            "ok": true,
+            "version": env!("CARGO_PKG_VERSION"),
+            "name": env!("CARGO_PKG_NAME"),
+        })),
         "open" => op_open(args),
-        "status" => with_state(|st| {
+        "status" => with_state(args, |st| {
             Ok(json!({
                 "storage_url": st.storage_url,
                 "geofabrik_url": st.geofabrik_url,
@@ -316,7 +376,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
                 .collect();
             ok(json!({ "regions": out, "count": out.len() }))
         }
-        "discover" => op_discover(),
+        "discover" => op_discover(args),
         "host" => op_host(args),
         "host_bulk" => op_host_bulk(args),
         "register" => op_register(args),
@@ -325,7 +385,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
         "fetch" => op_fetch(args),
         "import" => op_import(args),
         "update" => op_update(args),
-        "catalog" => with_state(|st| {
+        "catalog" => with_state(args, |st| {
             Ok(client(st)
                 .catalog()
                 .into_iter()
@@ -346,7 +406,13 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
 }
 
 fn op_open(args: &Value) -> *mut c_char {
-    let state_path = str_arg(args, "state_path").unwrap_or_else(|| "osm-state.json".to_string());
+    // Default cache/state paths land under LOGOS_USER_DIR (the Basecamp data
+    // tree) when the caller gives none and the env var is set, so a module
+    // that calls open({}) no longer drops files into the host process CWD.
+    // Outside Logos (no LOGOS_USER_DIR) the bare filenames apply, preserving
+    // the CLI/tests behavior.
+    let state_path = resolve_path(str_arg(args, "state_path"), "osm-state.json");
+    let cache_dir = resolve_path(str_arg(args, "cache_dir"), "osm-cache");
     let loaded = std::fs::read(&state_path)
         .ok()
         .and_then(|b| serde_json::from_slice::<AppState>(&b).ok());
@@ -355,7 +421,7 @@ fn op_open(args: &Value) -> *mut c_char {
             .unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
         geofabrik_url: str_arg(args, "geofabrik_url")
             .unwrap_or_else(|| crate::geofabrik::DEFAULT_BASE.to_string()),
-        cache_dir: str_arg(args, "cache_dir").unwrap_or_else(|| "osm-cache".to_string()),
+        cache_dir: cache_dir.clone(),
         memory: args
             .get("memory")
             .and_then(|m| m.as_bool())
@@ -370,6 +436,8 @@ fn op_open(args: &Value) -> *mut c_char {
     if let Some(v) = str_arg(args, "geofabrik_url") {
         st.geofabrik_url = v;
     }
+    // Only an explicit cache_dir arg overrides a loaded state's cache dir;
+    // the resolved default applies just to freshly-created state.
     if let Some(v) = str_arg(args, "cache_dir") {
         st.cache_dir = v;
     }
@@ -396,17 +464,34 @@ fn op_open(args: &Value) -> *mut c_char {
     if let Err(e) = st.save() {
         return err(format!("{e:#}"));
     }
-    *STATE.lock().unwrap() = Some(st);
+    // Store under the caller's session id (default "default"), and make it
+    // the active session so ops without an explicit session target it.
+    let sid = str_arg(args, "session").unwrap_or_else(|| "default".to_string());
+    {
+        let mut guard = SESSIONS.lock().unwrap();
+        guard.get_or_insert_with(HashMap::new).insert(sid.clone(), st);
+    }
+    *ACTIVE_SESSION.lock().unwrap() = sid;
     ok(summary)
 }
 
+/// Clone the session state named in `args` out from under the lock, so async
+/// ops (which block on the tokio runtime for seconds) never hold the sessions
+/// mutex while they run. `AppState` is config-only (endpoints, cache dir,
+/// program id), so a clone is cheap and races with a concurrent `open` are
+/// impossible by construction.
+fn state_snapshot(args: &Value) -> Option<AppState> {
+    let sid = resolve_session(args)?;
+    let guard = SESSIONS.lock().unwrap();
+    guard.as_ref()?.get(sid.as_str()).cloned()
+}
+
 /// Live upstream cross-check of the closed region set (needs network).
-fn op_discover() -> *mut c_char {
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+fn op_discover(args: &Value) -> *mut c_char {
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     let available = match block_on(c.discover()) {
         Ok(a) => a,
         Err(e) => return err(format!("discover: {e:#}")),
@@ -434,11 +519,10 @@ fn op_host(args: &Value) -> *mut c_char {
         },
         None => None,
     };
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     let snap = match block_on(c.host_region(&region)) {
         Ok(s) => s,
         Err(e) => return err(format!("host {region}: {e:#}")),
@@ -452,7 +536,7 @@ fn op_host(args: &Value) -> *mut c_char {
     };
     let tx = registrar.as_ref().map(|reg| {
         let built = build_register_region(&program_id, reg, &snap.registration(None));
-        tx_json(st, &built, reg)
+        tx_json(&st, &built, reg)
     });
     ok(json!({
         "region": snap.region,
@@ -485,11 +569,10 @@ fn op_host_bulk(args: &Value) -> *mut c_char {
         .map(String::from)
         .collect();
     let opt_out: Vec<&str> = opt_out.iter().map(String::as_str).collect();
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     let report = match block_on(c.host_regions_bulk(&wanted, &opt_out)) {
         Ok(r) => r,
         Err(e) => return err(format!("host_bulk: {e:#}")),
@@ -523,7 +606,7 @@ fn op_register(args: &Value) -> *mut c_char {
         Ok(a) => a,
         Err(e) => return err(format!("registrar_hex: {e}")),
     };
-    with_state(|st| {
+    with_state(args, |st| {
         let rec = client(st)
             .catalog()
             .into_iter()
@@ -560,7 +643,7 @@ fn op_register_bulk(args: &Value) -> *mut c_char {
         Err(e) => return err(format!("registrar_hex: {e}")),
     };
     let wanted: Vec<String> = spec.split(',').map(str::trim).map(String::from).collect();
-    with_state(|st| {
+    with_state(args, |st| {
         let catalog = client(st).catalog();
         let mut regs = Vec::with_capacity(wanted.len());
         for region in &wanted {
@@ -596,7 +679,7 @@ fn op_init(args: &Value) -> *mut c_char {
         Ok(a) => a,
         Err(e) => return err(format!("owner_hex: {e}")),
     };
-    with_state(|st| {
+    with_state(args, |st| {
         let program_id = program_id_from_hex(&st.program_id_hex)?;
         let built = build_init(&program_id, &owner);
         Ok(tx_json(st, &built, &owner))
@@ -622,11 +705,10 @@ fn op_fetch(args: &Value) -> *mut c_char {
         },
         Err(e) => return err(format!("md5_hex: {e}")),
     };
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     let outcome = match block_on(c.fetch_snapshot(&region, &cid, &checksum)) {
         Ok(o) => o,
         Err(e) => return err(format!("fetch {region}: {e:#}")),
@@ -664,11 +746,10 @@ fn op_import(args: &Value) -> *mut c_char {
         },
         None => None,
     };
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     let path = std::path::Path::new(&pbf);
     if store {
         let snap = match block_on(c.host_local(&region, path)) {
@@ -684,7 +765,7 @@ fn op_import(args: &Value) -> *mut c_char {
         };
         let tx = registrar.as_ref().map(|reg| {
             let built = build_register_region(&program_id, reg, &snap.registration(None));
-            tx_json(st, &built, reg)
+            tx_json(&st, &built, reg)
         });
         ok(json!({
             "region": snap.region,
@@ -711,11 +792,10 @@ fn op_update(args: &Value) -> *mut c_char {
     let Some(region) = str_arg(args, "region") else {
         return err("update requires region");
     };
-    let guard = STATE.lock().unwrap();
-    let Some(st) = guard.as_ref() else {
-        return err("osm not open");
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
     };
-    let c = client(st);
+    let c = client(&st);
     match block_on(c.update_check(&region)) {
         Ok(crate::UpdateStatus::UpToDate { local, published }) => {
             ok(json!({ "status": "up_to_date", "local": local, "published": published }))
