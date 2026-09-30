@@ -1,11 +1,89 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> Last updated: **2026-08-28** (by Claude — handoff refresh; see the next
-> section). Earlier: 2026-08-22 ALL GREEN: public testnet lifecycle + all 4
-> CI jobs on main. Only user-only steps remain.
+> **Last updated: 2026-09-30** — the v0.3 port. The section below is current;
+> everything after the historical marker describes the pre-port state and is
+> kept for context only, including rules that no longer apply.
 
-## 🤝 STATE AT HANDOFF (2026-08-28) — read this first
+## 🤝 STATE AT HANDOFF (2026-09-30) — read this first
+
+**Where things are:** branch `lez-0.3` at the tip of `aegonmyy/logos-osm`.
+`main` is the pre-port code (v0.2.4 LEZ, v0.1 IDL, no consumer example) and
+is stale — read `lez-0.3`. The solution PR is **opened**
+(`logos-co/lambda-prize#169`, a draft).
+
+**The registry is ported to the LEZ v0.3 program model.** v0.3 replaced the
+post-state API with `plan`/`apply`: a program emits one effect per shard it
+writes, and each effect is applied separately against that shard's
+pre-data. Consequences that matter:
+
+- The guest is `run_program(plan, apply)`. `plan` validates what account
+  metadata can establish and emits effects; `apply` enforces the
+  state-dependent preconditions and returns new shard contents.
+- **The registrar-claim pattern is gone.** v0.2 needed
+  `Claim::Authorized` on first touch because a program owned whole accounts;
+  v0.3 writes only the program's own shard, so there is nothing to claim.
+  The rule-7 machinery below is history, not current behaviour.
+- **A deployed program lives at an account the deployer chose**, not at a
+  fixed function of its bytecode. PDAs and transaction targets key off that
+  account (`--program-account` / `OSM_PROGRAM_ACCOUNT`), and
+  `DOCUMENTED_IMAGE_ID_HEX` is only the bytecode identity used to verify the
+  committed artifact. Getting this wrong is invisible until the accounts
+  turn out not to exist.
+- Instructions are **borsh** (they were risc0-serde `u32` words).
+- Account reads are `account.data.shard(program_account)` — 0.3 stores a
+  per-program shard map, not one blob per account.
+- Toolchain is **1.98.1** (`rust-toolchain.toml`); 1.94 cannot compile the
+  0.3 sequencer crates, which use if-let guards.
+
+**Program image id:** `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79`
+(guest artifact rebuilt 2026-09-30). Re-pin it in `methods/osm-host/build.rs`
+(both the hex comment and the `[u32; 8]`), `osm-sdk/src/ffi.rs`, the README,
+this file, `docs/DESIGN.md`, `docs/CU_COSTS.md`, both submission files, and
+`tests/tests/osm_registry_testnet.rs`.
+
+**What works right now, verified on this machine:**
+
+- 66 tests pass across the workspace, 0 failures.
+- The guest state machine's 10 host tests pass against the new model.
+- `osm lookup` reads the registry from the live testnet over the sequencer's
+  JSON-RPC (no wallet). Verified against `https://testnet.lez.logos.co`.
+- The catalog publishes **both** modules on all four platforms: `osm` (the
+  SDK core module) and `osm_app` (the distribution app). The app had never
+  been built before 2026-09-30.
+- CU costs re-measured for the plan/apply split (`docs/CU_COSTS.md`).
+
+**What is blocked, and on what:**
+
+1. **Deploying on testnet 0.3 needs a funded payer account**, which the
+   testnet does not hand out. Read `docs/TESTNET_FUNDING.md` first: it has
+   the observed failure, everything that was ruled out, and the one ask
+   (a genesis-funded account, which is also what the 25 region
+   registrations will need).
+2. **The 25 regions** depend on (1).
+3. **The 5 independent modules** need five real contributors; nothing in
+   this repo can satisfy that.
+4. **The app has never been *run* in Basecamp**, only built. Loading it
+   needs the Basecamp runtime, which needs nix.
+5. **macOS has never been exercised.** The catalog builds `darwin-arm64`.
+
+**CI is `workflow_dispatch` only.** The suite's real-proof job runs the
+whole lifecycle at `RISC0_DEV_MODE=0` and takes hours, so it is run
+deliberately rather than on every push. The jobs now target hosted runners
+and install Rust 1.98.1; before that they targeted the self-hosted box that
+died with the VPS, and the hosted-runner guard read an env var GitHub does
+not set.
+
+**If you are a successor agent:** commit and push to `lez-0.3`. Do not
+merge `main` until the deployment and adoption criteria are real. Verify
+before claiming: the README previously asserted a live testnet deployment
+that the v0.3 chain reset had already erased.
+
+---
+
+## 🗄️ Historical: STATE AT HANDOFF (2026-08-28)
+
+
 
 **Everything needed is on `main`, verified against the remote:**
 
