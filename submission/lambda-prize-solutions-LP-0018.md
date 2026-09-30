@@ -118,8 +118,12 @@ as much as trust in that operator.
 - [x] **On-chain registry**: stores region, parent, level, cid, checksum,
   version, hosted, and timestamp per entry; keyed by Geofabrik path; queryable
   by region, parent, and CID; supports batch registration in one transaction.
-- [ ] **Testnet 0.3**: **PENDING.** The program is ported to the v0.3 program
-  model and the deployment is the remaining step.
+- [ ] **Testnet 0.3**: **PENDING, blocked.** The program is ported to the
+  v0.3 program model. Deploying it needs a payer account that already holds
+  tokens; a freshly created account holds nothing and the testnet does not
+  fund one. `docs/TESTNET_FUNDING.md` records the observed failure, what was
+  ruled out, and the single thing needed: a genesis-funded account on 0.3,
+  which is also what the region registrations require.
 - [x] **OSM registry SDK**: a self-contained module with a documented API and a
   minimal embedding example. The distribution app uses the full API rather than
   a separate client, and the SDK is published as its own module.
@@ -158,9 +162,12 @@ as much as trust in that operator.
 
 ### Supportability
 
-- [ ] **Testnet 0.3 deployment**: **PENDING.**
-- [x] Builds and runs on macOS (Apple Silicon) and Linux (x86_64). The catalog
-  publishes darwin-arm64, linux-amd64, linux-arm64, and windows-x86_64.
+- [ ] **Testnet 0.3 deployment**: **PENDING, blocked on a funded account** (see
+  `docs/TESTNET_FUNDING.md`).
+- [ ] Builds on macOS (Apple Silicon) and Linux (x86_64); **run** is verified
+  on Linux only. The catalog publishes darwin-arm64, linux-amd64, linux-arm64
+  and windows-x86_64, and all four build. Running the lifecycle end to end on
+  Apple Silicon has not been done: that needs a Mac.
 - [x] Basecamp modules built with `logos-module-builder` (`mkLogosModule`).
 - [x] Published to a fork of `logos-modules-release-base` via
   `logos-modules-release-action`; the catalog's `logos-repo.json` is included
@@ -176,9 +183,13 @@ as much as trust in that operator.
   consumers; what is missing is only the generation step. Porting the guest to
   the macro style is the change that would close that gap, and it is a rewrite
   of the state machine rather than a configuration change.
-- [ ] **End-to-end integration tests green in CI**: **PENDING.** The tests exist
-  and run against a standalone sequencer; the CI workflow is being repointed and
-  the suite is mid-port to the v0.3 model.
+- [ ] **End-to-end integration tests green in CI**: **PENDING.** The suite
+  passes locally (66 tests, 0 failures) and the live and testnet targets are
+  ported to the v0.3 API. CI is `workflow_dispatch` only by choice — its
+  real-proof job runs the full lifecycle at `RISC0_DEV_MODE=0` and takes
+  hours — so it has not been run since the port. The jobs now target hosted
+  runners at Rust 1.98.1; before that they targeted a self-hosted runner that
+  no longer exists.
 - [x] README documents setup, the deployed program id, the region list, and
   step-by-step usage via CLI and Basecamp app.
 - [x] SDK documentation covers resolving a region to its CID and metadata as a
