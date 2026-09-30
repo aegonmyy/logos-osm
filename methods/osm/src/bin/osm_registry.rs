@@ -77,11 +77,16 @@ fn region_pda_id(program: &AccountId, region_path: &str) -> AccountId {
 
 /// The embedded-table entry for a region path, or panic (reject) if the path
 /// is outside the predefined closed set.
-fn require_in_set(path: &str) -> (&'static str, u8) {
-    let r = REGIONS
+fn table_region(path: &str) -> &'static osm_core::set::Region {
+    REGIONS
         .iter()
         .find(|r| r.path == path)
-        .unwrap_or_else(|| panic!("RegisterRegion: {path} is outside the predefined region set"));
+        .unwrap_or_else(|| panic!("RegisterRegion: {path} is outside the predefined region set"))
+}
+
+/// The embedded-table entry's `(parent, level)` for a region path.
+fn require_in_set(path: &str) -> (&'static str, u8) {
+    let r = table_region(path);
     let level = match r.level {
         Level::Country => 0u8,
         Level::Subregion => 1u8,
@@ -253,6 +258,14 @@ fn apply(effect: Effect, pre: &ShardData) -> Option<ShardData> {
                 "RegisterRegion: version {version} is not a YYYYMMDD date",
                 version = registration.version
             );
+            // The stored URL is what makes a mirror auditable, so it is
+            // checked against the frozen table rather than trusted: a
+            // registration cannot record a pointer at some other extract.
+            assert_eq!(
+                registration.source_url,
+                table_region(path).source_url(),
+                "RegisterRegion: source_url is not the canonical URL for {path}"
+            );
 
             let mut entry = if pre.is_empty() {
                 RegionEntry {
@@ -273,6 +286,7 @@ fn apply(effect: Effect, pre: &ShardData) -> Option<ShardData> {
             entry.mirrors.push(Mirror {
                 registrar,
                 cid: registration.cid,
+                source_url: registration.source_url,
                 checksum: registration.checksum,
                 version: registration.version,
                 timestamp: registration.timestamp,
@@ -325,6 +339,7 @@ mod tests {
         RegionRegistration {
             region: path.into(),
             cid: format!("cid-{path}"),
+            source_url: table_region(path).source_url().to_string(),
             checksum: [0xab; 16],
             version: 20260524,
             timestamp: ts,
@@ -435,6 +450,7 @@ mod tests {
                 registration: RegionRegistration {
                     region: "germany".into(),
                     cid: "cid-v2".into(),
+                    source_url: table_region("germany").source_url().to_string(),
                     checksum: [0xcd; 16],
                     version: 20260601,
                     timestamp: 200,
@@ -588,6 +604,7 @@ mod tests {
                     registration: RegionRegistration {
                         region: "kenya".into(),
                         cid: format!("cid-{i}"),
+                        source_url: table_region("kenya").source_url().to_string(),
                         checksum: [0; 16],
                         version: 20260101,
                         timestamp: i + 1,

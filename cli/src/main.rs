@@ -16,8 +16,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use logos_osm::regions::{Level, REGIONS};
 use logos_osm::registry::{
-    build_init, build_register_region, build_register_regions_batch,
+    RegionEntry, build_init, build_register_region, build_register_regions_batch, region_pda,
 };
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use logos_osm::storage::{CodexStorage, MemoryStorage};
 use logos_osm::{OsmClient, UpdateStatus};
 use serde::Serialize;
@@ -41,6 +42,20 @@ struct Cli {
     /// Geofabrik base URL (mirror / fixture override).
     #[arg(long, env = "OSM_GEOFABRIK_URL", default_value = logos_osm::geofabrik::DEFAULT_BASE)]
     geofabrik: String,
+    /// The deployed registry program's account id (base58), as returned by the
+    /// deployment. Required for the commands that build a registration
+    /// transaction: v0.3 addresses a program by its chosen account, not by the
+    /// image id of its bytecode.
+    #[arg(long, env = "OSM_PROGRAM_ACCOUNT")]
+    program_account: Option<String>,
+    /// LEZ sequencer JSON-RPC endpoint, used by `lookup` to read registry
+    /// accounts. Read-only: a query needs no wallet.
+    #[arg(
+        long,
+        env = "OSM_SEQUENCER",
+        default_value = "https://testnet.lez.logos.co"
+    )]
+    sequencer: String,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -124,14 +139,28 @@ enum Cmd {
     Update { region: String },
     /// List the local catalog.
     Catalog,
+    /// Read registry entries from the chain: one region, every subregion of a
+    /// parent, or the region holding a given storage CID.
+    Lookup {
+        /// Look up one region by its Geofabrik path (e.g. `germany`).
+        #[arg(long)]
+        region: Option<String>,
+        /// Look up every registered subregion of a parent path (e.g. `us`).
+        #[arg(long)]
+        parent: Option<String>,
+        /// Find the region whose stored snapshot has this Logos Storage CID.
+        #[arg(long)]
+        cid: Option<String>,
+    },
 }
 
 /// A built LEZ transaction, printed as JSON for the wallet to submit.
 #[derive(Serialize)]
 struct TxCmd {
-    /// The deployed program the tx targets.
-    program_id_hex: String,
-    /// The program's on-chain account id (the transaction target).
+    /// The image id of the registry bytecode (bytecode identity, for
+    /// verifying the committed artifact). Not the program's address.
+    image_id_hex: String,
+    /// The deployed program's account id: the transaction target in v0.3.
     program_account_hex: String,
     /// Account ids (32-byte hex each) in the order the guest's plan expects.
     accounts_hex: Vec<String>,
@@ -158,7 +187,7 @@ fn print_tx(
     signer: &lee_core::account::AccountId,
 ) {
     let cmd = TxCmd {
-        program_id_hex: {
+        image_id_hex: {
             let words = osm_registry::osm_registry_id();
             words.iter().map(|w| format!("{w:08x}")).collect()
         },
@@ -170,6 +199,68 @@ fn print_tx(
     };
     println!("--- {label} transaction (submit via the wallet) ---");
     println!("{}", serde_json::to_string_pretty(&cmd).unwrap());
+}
+
+/// Connect to the sequencer for read-only registry queries.
+fn chain_client(url: &str) -> Result<SequencerClient> {
+    SequencerClientBuilder::default()
+        .build(url.to_string())
+        .with_context(|| format!("--sequencer is not a usable URL: {url}"))
+}
+
+/// One region's on-chain entry, or `None` when nothing is registered for it.
+async fn fetch_entry(
+    client: &SequencerClient,
+    program_account: &lee_core::account::AccountId,
+    path: &str,
+) -> Result<Option<RegionEntry>> {
+    let account = client
+        .get_account(region_pda(program_account, path))
+        .await
+        .with_context(|| format!("reading {path} from the sequencer"))?;
+    let shard = account.data.shard(*program_account);
+    if shard.as_ref().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        borsh::from_slice(shard.as_ref()).with_context(|| format!("decoding {path}"))?,
+    ))
+}
+
+/// Print one entry in a stable, greppable form.
+fn print_entry(path: &str, entry: &RegionEntry) {
+    println!(
+        "{}\t{}\tlevel={}\tmirrors={}\tregistrars={}",
+        entry.region,
+        if entry.parent.is_empty() { "-" } else { &entry.parent },
+        entry.level,
+        entry.mirrors.len(),
+        entry.registrars().len()
+    );
+    for m in &entry.mirrors {
+        println!(
+            "  {} v{} ts={} cid={} md5={} url={}",
+            hex32(m.registrar),
+            m.version,
+            m.timestamp,
+            m.cid,
+            hex::encode(m.checksum),
+            m.source_url
+        );
+    }
+    let _ = path;
+}
+
+/// The configured program account, or an error naming what to set.
+fn program_account(raw: Option<&str>) -> Result<lee_core::account::AccountId> {
+    let raw = raw.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no program account: pass --program-account <base58> (or set OSM_PROGRAM_ACCOUNT) \
+             to the address the deployment returned"
+        )
+    })?;
+    raw.parse()
+        .map_err(|e| anyhow::anyhow!("--program-account must be a base58 account id: {e}"))
 }
 
 fn parse_account(hex_str: &str) -> Result<lee_core::account::AccountId> {
@@ -190,7 +281,9 @@ async fn main() -> Result<()> {
         )
         .init();
     let cli = Cli::parse();
-    let program_id = osm_registry::osm_registry_id();
+    // Hoisted before the subcommand match moves `cli`.
+    let program_account_arg = cli.program_account.clone();
+    let sequencer_url = cli.sequencer.clone();
 
     // The client is generic over the storage backend; the CLI exposes the
     // real node and an in-memory mode for offline demos.
@@ -259,7 +352,7 @@ async fn main() -> Result<()> {
                 if let Some(reg) = registrar {
                     let registrar = parse_account(&reg)?;
                     let built =
-                        build_register_region(&program_id, &registrar, &snap.registration(None));
+                        build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
                     print_tx("RegisterRegion", &built, &registrar);
                 } else {
                     println!("(pass --registrar <hex> to also print the registration tx)");
@@ -325,7 +418,7 @@ async fn main() -> Result<()> {
                     path: rec.path,
                 };
                 let built =
-                    build_register_region(&program_id, &registrar, &snap.registration(None));
+                    build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
                 print_tx("RegisterRegion", &built, &registrar);
                 Ok(())
             })?;
@@ -355,14 +448,14 @@ async fn main() -> Result<()> {
                     };
                     regs.push(snap.registration(None));
                 }
-                let built = build_register_regions_batch(&program_id, &registrar, &regs);
+                let built = build_register_regions_batch(&program_account(program_account_arg.as_deref())?, &registrar, &regs);
                 print_tx("RegisterRegionsBatch", &built, &registrar);
                 Ok(())
             })?;
         }
         Cmd::Init { owner } => {
             let owner = parse_account(&owner)?;
-            let built = build_init(&program_id, &owner);
+            let built = build_init(&program_account(program_account_arg.as_deref())?, &owner);
             print_tx("Init", &built, &owner);
         }
         Cmd::Fetch {
@@ -403,7 +496,7 @@ async fn main() -> Result<()> {
                     );
                     println!("storage cid: {}", snap.cid);
                     let built =
-                        build_register_region(&program_id, &registrar, &snap.registration(None));
+                        build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
                     print_tx("RegisterRegion", &built, &registrar);
                 } else {
                     let summary = client.import_local(&region, &pbf).await?;
@@ -435,6 +528,54 @@ async fn main() -> Result<()> {
                 }
                 Ok(())
             })?;
+        }
+        Cmd::Lookup {
+            region,
+            parent,
+            cid,
+        } => {
+            let program_account = program_account(program_account_arg.as_deref())?;
+            let client = chain_client(&sequencer_url)?;
+            let selected = [region.is_some(), parent.is_some(), cid.is_some()]
+                .iter()
+                .filter(|x| **x)
+                .count();
+            if selected != 1 {
+                anyhow::bail!("pass exactly one of --region, --parent, or --cid");
+            }
+
+            if let Some(path) = region {
+                match fetch_entry(&client, &program_account, &path).await? {
+                    Some(entry) => print_entry(&path, &entry),
+                    None => println!("{path}\tnot registered"),
+                }
+            } else if let Some(parent_path) = parent {
+                let children = logos_osm::registry::children_of(&parent_path);
+                if children.is_empty() {
+                    anyhow::bail!("{parent_path} has no subregions in the predefined set");
+                }
+                for child in children {
+                    match fetch_entry(&client, &program_account, child.path).await? {
+                        Some(entry) => print_entry(child.path, &entry),
+                        None => println!("{}\tnot registered", child.path),
+                    }
+                }
+            } else if let Some(wanted) = cid {
+                // The chain cannot be enumerated by CID, and the region set is
+                // closed, so a CID search walks the set and reads each entry.
+                let mut hits = 0;
+                for r in REGIONS {
+                    if let Some(entry) = fetch_entry(&client, &program_account, r.path).await? {
+                        if entry.mirrors.iter().any(|m| m.cid == wanted) {
+                            print_entry(r.path, &entry);
+                            hits += 1;
+                        }
+                    }
+                }
+                if hits == 0 {
+                    println!("{wanted}\tno region on chain carries this CID");
+                }
+            }
         }
         Cmd::Catalog => {
             with_client!(|client: OsmClient<_>| async move {

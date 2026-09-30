@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use lee_core::account::AccountId;
+use osm_integration_tests::deploy_program;
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
     decode_registry_state, region_pda, registry_pda, RegionRegistration,
@@ -81,6 +82,9 @@ fn registration(region: &str, cid: &str, version: u32, timestamp: u64) -> Region
     RegionRegistration {
         region: region.into(),
         cid: cid.into(),
+        source_url: logos_osm::regions::by_path(region)
+            .map(|r| r.source_url().to_string())
+            .unwrap_or_default(),
         checksum: [0x5a; 16],
         version,
         timestamp,
@@ -91,21 +95,21 @@ fn registration(region: &str, cid: &str, version: u32, timestamp: u64) -> Region
 #[ignore = "requires Docker + the standalone LEZ sequencer stack"]
 async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     let mut ctx = TestContext::new().await?;
-    let program_id = osm_registry::osm_registry_id();
 
-    // 1) Deploy the committed guest artifact.
-    let elf = osm_registry::osm_registry_elf();
-    let elf_path = std::env::temp_dir().join(format!("osm-registry-{}.elf", std::process::id()));
-    std::fs::write(&elf_path, elf)?;
-    wallet::cli::execute_subcommand(
+    // 1) Deploy the committed guest artifact and keep the address it lands at.
+    // Under v0.3 a program's address is chosen at deploy time, so every PDA
+    // and every transaction target keys off this account rather than off the
+    // bytecode's image id.
+    let payer = new_public_account(&mut ctx, "osm-payer").await?;
+    wait_block().await;
+    ctx.wallet_mut().sync_to_latest_block().await?;
+    let program_account = deploy_program(
         ctx.wallet_mut(),
-        Command::DeployProgram {
-            binary_filepath: elf_path.clone(),
-        },
+        osm_registry::osm_registry_elf().to_vec(),
+        payer,
     )
     .await
     .context("deploying osm-registry program")?;
-    let _ = std::fs::remove_file(&elf_path);
     wait_block().await;
     ctx.wallet_mut().sync_to_latest_block().await?;
 
@@ -119,24 +123,24 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     ctx.wallet_mut().sync_to_latest_block().await?;
 
     // 3) Init.
-    submit(&mut ctx, &build_init(&program_id, &owner), &owner, "Init").await?;
+    submit(&mut ctx, &build_init(&program_account, &owner), &owner, "Init").await?;
     let reg_state: osm_core::RegistryState = {
         let acc = ctx
             .wallet()
-            .get_account_public(registry_pda(&program_id))
+            .get_account_public(registry_pda(&program_account))
             .await?;
-        decode_registry_state(acc.data.as_ref()).context("decoding RegistryState after Init")?
+        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding RegistryState after Init")?
     };
     assert_eq!(reg_state.initialized, 1);
     assert_eq!(reg_state.owner, *owner.value());
     assert_eq!(reg_state.region_count(), 0);
 
     // 4) Registrar A mirrors germany.
-    let germany_pda = region_pda(&program_id, "germany");
+    let germany_pda = region_pda(&program_account, "germany");
     submit(
         &mut ctx,
         &build_register_region(
-            &program_id,
+            &program_account,
             &registrar_a,
             &registration("germany", "cid-germany-a", 20260801, 1_787_000_000),
         ),
@@ -146,7 +150,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.as_ref()).context("decoding germany after A")?
+        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after A")?
     };
     assert_eq!(entry.region, "germany");
     // parent/level come from the embedded table, not the client.
@@ -162,7 +166,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     submit(
         &mut ctx,
         &build_register_region(
-            &program_id,
+            &program_account,
             &registrar_b,
             &registration("germany", "cid-germany-b", 20260815, 1_787_864_000),
         ),
@@ -172,7 +176,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.as_ref()).context("decoding germany after B")?
+        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after B")?
     };
     assert_eq!(entry.mirrors.len(), 2, "history must be append-only");
     assert_eq!(entry.registrars().len(), 2);
@@ -185,7 +189,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     submit(
         &mut ctx,
         &build_register_region(
-            &program_id,
+            &program_account,
             &registrar_c,
             &registration("germany", "cid-germany-c", 20260821, 1_788_000_000),
         ),
@@ -195,7 +199,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.as_ref()).context("decoding germany after C")?
+        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after C")?
     };
     assert_eq!(entry.registrars().len(), 3, "adoption bar reached");
     assert_eq!(entry.latest_mirror().unwrap().version, 20260821);
@@ -208,7 +212,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     ];
     submit(
         &mut ctx,
-        &build_register_regions_batch(&program_id, &registrar_c, &batch),
+        &build_register_regions_batch(&program_account, &registrar_c, &batch),
         &registrar_c,
         "RegisterRegionsBatch",
     )
@@ -216,9 +220,9 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     for r in &batch {
         let acc = ctx
             .wallet()
-            .get_account_public(region_pda(&program_id, &r.region))
+            .get_account_public(region_pda(&program_account, &r.region))
             .await?;
-        let e = decode_region_entry(acc.data.as_ref())
+        let e = decode_region_entry(acc.data.shard(program_account).as_ref())
             .with_context(|| format!("decoding {} after batch", r.region))?;
         assert_eq!(e.mirrors.len(), 1);
         assert_eq!(e.mirrors[0].cid, r.cid);
@@ -227,9 +231,9 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     // The california subregion entry carries its table parent/level.
     let acc = ctx
         .wallet()
-        .get_account_public(region_pda(&program_id, "us/california"))
+        .get_account_public(region_pda(&program_account, "us/california"))
         .await?;
-    let e = decode_region_entry(acc.data.as_ref())?;
+    let e = decode_region_entry(acc.data.shard(program_account).as_ref())?;
     assert_eq!(e.parent, "us");
     assert_eq!(e.level, 1);
 
@@ -238,9 +242,9 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     let reg_state: osm_core::RegistryState = {
         let acc = ctx
             .wallet()
-            .get_account_public(registry_pda(&program_id))
+            .get_account_public(registry_pda(&program_account))
             .await?;
-        decode_registry_state(acc.data.as_ref()).context("decoding final RegistryState")?
+        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding final RegistryState")?
     };
     assert_eq!(reg_state.region_count(), 4);
     assert_eq!(reg_state.registration_count, 6);

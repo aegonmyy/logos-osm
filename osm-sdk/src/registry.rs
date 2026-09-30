@@ -33,7 +33,7 @@
 //! and mirror lookup by CID.
 
 use lee_core::account::{AccountId, ProgramShardSelector};
-use lee_core::program::{PdaSeed, ProgramId};
+use lee_core::program::PdaSeed;
 use wallet::{AccountIdentity, AccountMention};
 
 pub use osm_core::{
@@ -45,25 +45,24 @@ pub use osm_core::{
 /// `methods/osm/src/bin/osm_registry.rs::REGISTRY_SEED`).
 pub const REGISTRY_SEED: [u8; 32] = *b"/OSM/REGISTRY/V1/SEED/0000000000";
 
-/// The program's on-chain account id, as the chain derives it from the
-/// deployed program id. The guest's `PlanInput.self_account_id` equals this,
-/// and PDAs are derived from it.
-pub fn program_account(program_id: &ProgramId) -> AccountId {
-    AccountId::from_builtin_program(*program_id)
+/// Derive the registry PDA account id for a **deployed** program.
+///
+/// Under the v0.3 program model a deployed program lives at whatever account
+/// address the deployer chose, and the same bytecode may be deployed at
+/// several addresses. The PDA family is therefore seeded by the program's
+/// *account id*, not by its image id, and the guest agrees: it derives from
+/// `PlanInput.self_account_id`, which is the program's own account.
+pub fn registry_pda(program_account: &AccountId) -> AccountId {
+    AccountId::for_public_pda(program_account, &PdaSeed::new(REGISTRY_SEED))
 }
 
-/// Derive the registry PDA account id for a deployed program.
-pub fn registry_pda(program_id: &ProgramId) -> AccountId {
-    AccountId::for_public_pda(&program_account(program_id), &PdaSeed::new(REGISTRY_SEED))
-}
-
-/// Derive a region's PDA account id for `(program_id, region_path)`.
+/// Derive a region's PDA account id for `(program_account, region_path)`.
 ///
 /// The seed is `SHA-256("osm-region:" || path)` (see
 /// [`osm_core::region_seed`]) — the same derivation the guest asserts on.
-pub fn region_pda(program_id: &ProgramId, region_path: &str) -> AccountId {
+pub fn region_pda(program_account: &AccountId, region_path: &str) -> AccountId {
     AccountId::for_public_pda(
-        &program_account(program_id),
+        program_account,
         &PdaSeed::new(osm_core::region_seed(region_path)),
     )
 }
@@ -118,10 +117,10 @@ fn words(i: &Instruction) -> Vec<u8> {
 
 /// Build `Init`: binds `owner` as the registry authority (provenance only —
 /// registration itself stays permissionless).
-pub fn build_init(program_id: &ProgramId, owner: &AccountId) -> OsmTxBuilt {
+pub fn build_init(program_account: &AccountId, owner: &AccountId) -> OsmTxBuilt {
     OsmTxBuilt {
-        program_account_id: program_account(program_id),
-        accounts: vec![registry_pda(program_id), *owner],
+        program_account_id: *program_account,
+        accounts: vec![registry_pda(program_account), *owner],
         instruction: words(&Instruction::Init {
             owner: *owner.value(),
         }),
@@ -130,15 +129,15 @@ pub fn build_init(program_id: &ProgramId, owner: &AccountId) -> OsmTxBuilt {
 
 /// Build `RegisterRegion` for one mirror of one region.
 pub fn build_register_region(
-    program_id: &ProgramId,
+    program_account: &AccountId,
     registrar: &AccountId,
     registration: &RegionRegistration,
 ) -> OsmTxBuilt {
     OsmTxBuilt {
-        program_account_id: program_account(program_id),
+        program_account_id: *program_account,
         accounts: vec![
-            registry_pda(program_id),
-            region_pda(program_id, &registration.region),
+            registry_pda(program_account),
+            region_pda(program_account, &registration.region),
             *registrar,
         ],
         instruction: words(&Instruction::RegisterRegion {
@@ -150,7 +149,7 @@ pub fn build_register_region(
 /// Build `RegisterRegionsBatch` (bulk hosting): 1..=[`MAX_BATCH`]
 /// registrations in one transaction.
 pub fn build_register_regions_batch(
-    program_id: &ProgramId,
+    program_account: &AccountId,
     registrar: &AccountId,
     registrations: &[RegionRegistration],
 ) -> OsmTxBuilt {
@@ -159,12 +158,12 @@ pub fn build_register_regions_batch(
         "batch registration takes 1..={MAX_BATCH} regions, got {}",
         registrations.len()
     );
-    let mut accounts = vec![registry_pda(program_id), *registrar];
+    let mut accounts = vec![registry_pda(program_account), *registrar];
     for r in registrations {
-        accounts.push(region_pda(program_id, &r.region));
+        accounts.push(region_pda(program_account, &r.region));
     }
     OsmTxBuilt {
-        program_account_id: program_account(program_id),
+        program_account_id: *program_account,
         accounts,
         instruction: words(&Instruction::RegisterRegionsBatch {
             registrations: registrations.to_vec(),
@@ -248,7 +247,11 @@ mod tests {
     use super::*;
     use crate::regions::by_path;
 
-    const PROG: ProgramId = [7, 0, 0, 0, 0, 0, 0, 0];
+    /// A deployed program's account id. Under v0.3 this is the address the
+    /// deployer chose, so the tests use an arbitrary one.
+    fn prog() -> AccountId {
+        AccountId::new([7; 32])
+    }
     const REGISTRAR: [u8; 32] = [9; 32];
 
     fn registrar() -> AccountId {
@@ -259,6 +262,9 @@ mod tests {
         RegionRegistration {
             region: path.into(),
             cid: "cid0".into(),
+            source_url: crate::regions::by_path(path)
+                .map(|r| r.source_url().to_string())
+                .unwrap_or_default(),
             checksum: [0xab; 16],
             version: 20260821,
             timestamp: 1_787_000_000,
@@ -269,21 +275,21 @@ mod tests {
     fn region_pda_is_path_seeded() {
         // Different paths -> different accounts; stable across calls; and
         // distinct from the registry PDA.
-        let a = region_pda(&PROG, "germany");
-        let b = region_pda(&PROG, "us/california");
+        let a = region_pda(&prog(), "germany");
+        let b = region_pda(&prog(), "us/california");
         assert_ne!(a, b);
-        assert_eq!(a, region_pda(&PROG, "germany"));
-        assert_ne!(a, registry_pda(&PROG));
+        assert_eq!(a, region_pda(&prog(), "germany"));
+        assert_ne!(a, registry_pda(&prog()));
     }
 
     #[test]
     fn init_accounts_and_words() {
         let owner = registrar();
-        let built = build_init(&PROG, &owner);
+        let built = build_init(&prog(), &owner);
         assert_eq!(built.accounts.len(), 2);
-        assert_eq!(built.accounts[0], registry_pda(&PROG));
+        assert_eq!(built.accounts[0], registry_pda(&prog()));
         assert_eq!(built.accounts[1], owner);
-        assert_eq!(built.program_account_id, program_account(&PROG));
+        assert_eq!(built.program_account_id, prog());
         assert!(!built.instruction.is_empty());
         // Round-trip: the bytes decode back to the same instruction (this is
         // the guest's exact decode path).
@@ -293,10 +299,10 @@ mod tests {
 
     #[test]
     fn register_accounts_and_words() {
-        let built = build_register_region(&PROG, &registrar(), &registration("germany"));
+        let built = build_register_region(&prog(), &registrar(), &registration("germany"));
         assert_eq!(built.accounts.len(), 3);
-        assert_eq!(built.accounts[0], registry_pda(&PROG));
-        assert_eq!(built.accounts[1], region_pda(&PROG, "germany"));
+        assert_eq!(built.accounts[0], registry_pda(&prog()));
+        assert_eq!(built.accounts[1], region_pda(&prog(), "germany"));
         assert_eq!(built.accounts[2], registrar());
         let back: Instruction = borsh::from_slice(&built.instruction).unwrap();
         assert_eq!(
@@ -313,11 +319,11 @@ mod tests {
             .iter()
             .map(|p| registration(p))
             .collect();
-        let built = build_register_regions_batch(&PROG, &registrar(), &regs);
+        let built = build_register_regions_batch(&prog(), &registrar(), &regs);
         assert_eq!(built.accounts.len(), 2 + regs.len());
         assert_eq!(built.accounts[1], registrar());
         for (i, r) in regs.iter().enumerate() {
-            assert_eq!(built.accounts[2 + i], region_pda(&PROG, &r.region));
+            assert_eq!(built.accounts[2 + i], region_pda(&prog(), &r.region));
         }
         let back: Instruction = borsh::from_slice(&built.instruction).unwrap();
         match back {
@@ -340,19 +346,19 @@ mod tests {
                 }
             })
             .collect();
-        build_register_regions_batch(&PROG, &registrar(), &regs);
+        build_register_regions_batch(&prog(), &registrar(), &regs);
     }
 
     #[test]
     fn selectors_name_the_program_shard() {
-        let built = build_register_region(&PROG, &registrar(), &registration("kenya"));
+        let built = build_register_region(&prog(), &registrar(), &registration("kenya"));
         let selectors = built.selectors();
         assert_eq!(selectors.len(), 3);
         for (sel, acct) in selectors.iter().zip(built.accounts.iter()) {
             assert_eq!(sel.account_id, *acct);
             // Every selector names this program's shard: the PDAs are written
             // by it and the registrar is referenced for authorization.
-            assert_eq!(sel.program_account_id, program_account(&PROG));
+            assert_eq!(sel.program_account_id, prog());
         }
     }
 
@@ -362,6 +368,7 @@ mod tests {
         entry.mirrors.push(Mirror {
             registrar: REGISTRAR,
             cid: "cid0".into(),
+            source_url: "https://download.geofabrik.de/europe/germany-latest.osm.pbf".into(),
             checksum: [1; 16],
             version: 20260821,
             timestamp: 5,

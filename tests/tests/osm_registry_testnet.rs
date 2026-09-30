@@ -21,6 +21,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use lee::ProgramId;
 use lee_core::account::AccountId;
+use osm_integration_tests::deploy_program;
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
     decode_registry_state, region_pda, registry_pda, RegionRegistration,
@@ -75,12 +76,12 @@ async fn send_and_await(
     wallet: &mut WalletCore,
     built: &logos_osm::registry::OsmTxBuilt,
     signer: &AccountId,
-    program_id: ProgramId,
+    program_account: AccountId,
     label: &str,
 ) -> Result<()> {
     // v0.3: shard-scoped account mentions + borsh instruction + the target
-    // program's account id. `program_id` stays for the deploy/id checks.
-    let _ = program_id;
+    // program's account id.
+    let _ = program_account;
     let mentions = built.mentions(signer);
     let h = wallet
         .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
@@ -108,6 +109,9 @@ fn registration(region: &str, cid: &str, version: u32, timestamp: u64) -> Region
     RegionRegistration {
         region: region.into(),
         cid: cid.into(),
+        source_url: logos_osm::regions::by_path(region)
+            .map(|r| r.source_url().to_string())
+            .unwrap_or_default(),
         checksum: [0x5a; 16],
         version,
         timestamp,
@@ -159,30 +163,26 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     let start = net_retry!(wallet.sync_to_latest_block(), "initial-sync");
     println!("testnet: {} (start block {start})", testnet_url());
 
-    let program_id = osm_registry::osm_registry_id();
-    let got = hex_program(&program_id);
+    // The image id is the bytecode identity, checked against the committed
+    // artifact. Under v0.3 it is NOT the program's address.
+    let image_id = osm_registry::osm_registry_id();
+    let got = hex_program(&image_id);
     assert_eq!(
         got, EXPECTED_PROGRAM_ID_HEX,
-        "committed program id drifted from docs — rebuild via tools/guest-builder and re-pin"
+        "committed image id drifted from docs — rebuild via tools/guest-builder and re-pin"
     );
 
-    // 1) Deploy the committed guest artifact. (The macro unwraps the Ok value
-    // and returns fatal errors directly — no Result to attach context to.)
-    let elf = osm_registry::osm_registry_elf();
-    let elf_path = std::env::temp_dir().join(format!("osm-registry-{}.elf", std::process::id()));
-    std::fs::write(&elf_path, elf)?;
-    net_retry!(
-        wallet::cli::execute_subcommand(
-            &mut wallet,
-            Command::DeployProgram {
-                binary_filepath: elf_path.clone(),
-            },
-        ),
+    // 1) Deploy the committed guest artifact and keep the address it lands at.
+    // v0.3 chooses the program's account at deploy time, and PDAs and the
+    // transaction target both key off that account.
+    let payer = new_public_account(&mut wallet, "osm-testnet-payer").await?;
+    net_retry!(wallet.sync_to_latest_block(), "post-payer-sync");
+    let program_account = net_retry!(
+        deploy_program(&mut wallet, osm_registry::osm_registry_elf().to_vec(), payer),
         "deploy"
     );
-    let _ = std::fs::remove_file(&elf_path);
     net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
-    println!("deployed program {got}");
+    println!("deployed program at account {program_account}");
 
     // 2) Owner + one registrar.
     let owner = new_public_account(&mut wallet, "osm-testnet-owner").await?;
@@ -192,41 +192,41 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     // 3) Init.
     send_and_await(
         &mut wallet,
-        &build_init(&program_id, &owner),
+        &build_init(&program_account, &owner),
         &owner,
-        program_id,
+        program_account,
         "Init",
     )
     .await?;
     let reg_state: osm_core::RegistryState = {
-        let acc = wallet.get_account_public(registry_pda(&program_id)).await?;
-        decode_registry_state(acc.data.as_ref()).context("decoding RegistryState after Init")?
+        let acc = wallet.get_account_public(registry_pda(&program_account)).await?;
+        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding RegistryState after Init")?
     };
     assert_eq!(reg_state.initialized, 1);
     assert_eq!(reg_state.owner, *owner.value());
     println!(
         "Init: owner bound, registry PDA {}",
-        hex32(*registry_pda(&program_id).value())
+        hex32(*registry_pda(&program_account).value())
     );
 
     // 4) Register one region (germany) + a small batch, read back the entries.
-    let germany_pda = region_pda(&program_id, "germany");
+    let germany_pda = region_pda(&program_account, "germany");
     let t = 1_790_000_000u64;
     send_and_await(
         &mut wallet,
         &build_register_region(
-            &program_id,
+            &program_account,
             &registrar,
             &registration("germany", "cid-testnet-germany", 20260821, t),
         ),
         &registrar,
-        program_id,
+        program_account,
         "RegisterRegion(germany)",
     )
     .await?;
     let entry = {
         let acc = wallet.get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.as_ref()).context("decoding germany")?
+        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany")?
     };
     assert_eq!(entry.region, "germany");
     assert_eq!(entry.parent, "");
@@ -245,38 +245,38 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     ];
     send_and_await(
         &mut wallet,
-        &build_register_regions_batch(&program_id, &registrar, &batch),
+        &build_register_regions_batch(&program_account, &registrar, &batch),
         &registrar,
-        program_id,
+        program_account,
         "RegisterRegionsBatch",
     )
     .await?;
     for r in &batch {
         let acc = wallet
-            .get_account_public(region_pda(&program_id, &r.region))
+            .get_account_public(region_pda(&program_account, &r.region))
             .await?;
-        let e = decode_region_entry(acc.data.as_ref())
+        let e = decode_region_entry(acc.data.shard(program_account).as_ref())
             .with_context(|| format!("decoding {} after batch", r.region))?;
         assert_eq!(e.mirrors.len(), 1);
         assert_eq!(e.mirrors[0].cid, r.cid);
     }
     // california is a subregion: table-derived parent/level.
     let acc = wallet
-        .get_account_public(region_pda(&program_id, "us/california"))
+        .get_account_public(region_pda(&program_account, "us/california"))
         .await?;
-    let e = decode_region_entry(acc.data.as_ref())?;
+    let e = decode_region_entry(acc.data.shard(program_account).as_ref())?;
     assert_eq!(e.parent, "us");
     assert_eq!(e.level, 1);
 
     let reg_state: osm_core::RegistryState = {
-        let acc = wallet.get_account_public(registry_pda(&program_id)).await?;
-        decode_registry_state(acc.data.as_ref()).context("decoding final RegistryState")?
+        let acc = wallet.get_account_public(registry_pda(&program_account)).await?;
+        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding final RegistryState")?
     };
     assert_eq!(reg_state.region_count(), 3);
     assert_eq!(reg_state.registration_count, 3);
     println!(
         "testnet lifecycle OK: 3 regions, 3 registrations; program {got}; registry PDA {}",
-        hex32(*registry_pda(&program_id).value())
+        hex32(*registry_pda(&program_account).value())
     );
 
     Ok(())

@@ -260,15 +260,17 @@ async fn run_lifecycle<S: Storage + 'static>(
 
     // --- Registration tx shape (the wallet submits this). ---
     let registrar = lee_core::account::AccountId::new([9u8; 32]);
-    let program_id = osm_registry::osm_registry_id();
-    let built = build_register_region(&program_id, &registrar, &snap.registration(None));
+    // A deployed program's account id. This test only checks the tx shape, so
+    // any address stands in for the one a deployment would return.
+    let program_account = lee_core::account::AccountId::new([0x33; 32]);
+    let built = build_register_region(&program_account, &registrar, &snap.registration(None));
     assert_eq!(
         built.accounts.len(),
         3,
         "registry state + region PDA + signer"
     );
-    assert_eq!(built.accounts[1], region_pda(&program_id, "germany"));
-    assert_eq!(built.accounts[0], registry_pda(&program_id));
+    assert_eq!(built.accounts[1], region_pda(&program_account, "germany"));
+    assert_eq!(built.accounts[0], registry_pda(&program_account));
     assert!(!built.instruction.is_empty());
 
     // --- Catalog it, then fetch from storage + verify + import. ---

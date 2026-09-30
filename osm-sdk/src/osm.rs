@@ -44,10 +44,18 @@ pub struct HostedSnapshot {
 impl HostedSnapshot {
     /// The [`RegionRegistration`] a registrar submits to put this snapshot
     /// on the chain.
+    ///
+    /// The `source_url` comes from the frozen region table rather than from
+    /// the caller, so the recorded URL is the canonical Geofabrik one for the
+    /// region. The guest enforces the same thing on-chain.
     pub fn registration(&self, timestamp: Option<u64>) -> RegionRegistration {
+        let source_url = crate::regions::by_path(&self.region)
+            .map(|r| r.source_url().to_string())
+            .unwrap_or_default();
         RegionRegistration {
             region: self.region.clone(),
             cid: self.cid.clone(),
+            source_url,
             checksum: self.checksum,
             version: self.version,
             timestamp: timestamp.unwrap_or_else(now_unix),

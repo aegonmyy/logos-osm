@@ -89,6 +89,14 @@ pub struct Mirror {
     pub registrar: [u8; 32],
     /// The Logos Storage CID of the stored PBF snapshot (public locator).
     pub cid: String,
+    /// The canonical Geofabrik PBF URL this snapshot was taken from. Stored
+    /// per entry because the prize's registry schema requires it alongside
+    /// `cid` and `checksum`, and because it is what makes a mirror auditable:
+    /// a reader can go back to the publisher and re-check the bytes without
+    /// depending on this registry. The guest asserts it matches the frozen
+    /// region table, so a registration cannot record a URL pointing at some
+    /// other extract.
+    pub source_url: String,
     /// Geofabrik's published MD5 for this snapshot (raw 16 bytes).
     pub checksum: [u8; 16],
     /// The snapshot's Geofabrik version date in `YYYYMMDD` form (e.g.
@@ -145,6 +153,10 @@ pub struct RegionRegistration {
     pub region: String,
     /// Logos Storage CID of the stored snapshot.
     pub cid: String,
+    /// The canonical Geofabrik PBF URL this snapshot came from. The guest
+    /// checks it against the frozen region table, so it is stored rather than
+    /// derived on read.
+    pub source_url: String,
     /// Geofabrik's published MD5 (raw 16 bytes).
     pub checksum: [u8; 16],
     /// Snapshot version date, `YYYYMMDD`.
@@ -265,6 +277,7 @@ mod tests {
             mirrors: std::vec![Mirror {
                 registrar: [7; 32],
                 cid: "zDv...".into(),
+                source_url: "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf".into(),
                 checksum: [1; 16],
                 version: 20260524,
                 timestamp: 1_780_000_000,
@@ -282,6 +295,7 @@ mod tests {
             registration: RegionRegistration {
                 region: "germany".into(),
                 cid: "cid".into(),
+                source_url: "https://download.geofabrik.de/europe/germany-latest.osm.pbf".into(),
                 checksum: [9; 16],
                 version: 20260801,
                 timestamp: 42,

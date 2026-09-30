@@ -37,11 +37,16 @@ use crate::registry::{
 use crate::storage::{CodexStorage, MemoryStorage, Storage};
 use crate::OsmClient;
 
-/// The pinned program id of the deployed `osm-registry` guest, hex
-/// (big-endian bytes of the `[u32; 8]` id). Kept in sync with
-/// `methods/osm-host`'s `DOCUMENTED_ID_HEX`; the integration-test crate has a
-/// consistency test asserting the embedded artifact still hashes to this.
-pub const DOCUMENTED_PROGRAM_ID_HEX: &str =
+/// The **image id** of the `osm-registry` guest bytecode, hex (big-endian
+/// bytes of the `[u32; 8]` id). Kept in sync with `methods/osm-host`'s
+/// `DOCUMENTED_ID_HEX`; the integration-test crate has a consistency test
+/// asserting the embedded artifact still hashes to this.
+///
+/// This is the bytecode identity, not the program's address. Under the v0.3
+/// model a deployed program lives at an account the deployer chose, and PDAs
+/// and transactions key off that account id (`program_account_hex`), not off
+/// this value.
+pub const DOCUMENTED_IMAGE_ID_HEX: &str =
     "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
 
 /// Return a heap JSON string the caller must free with `logos_osm_free_string`.
@@ -90,8 +95,10 @@ struct AppState {
     cache_dir: String,
     /// In-memory storage (offline demo): nothing persists.
     memory: bool,
-    /// Program binding for built transactions (hex, overridable).
-    program_id_hex: String,
+    /// The deployed program's account id (hex). Empty until a deployment is
+    /// recorded; tx-building ops require it, because v0.3 addresses a program
+    /// by its chosen account, not by its image id.
+    program_account_hex: String,
     state_path: String,
 }
 
@@ -250,18 +257,6 @@ where
 // Transaction JSON (for the wallet to submit — mirrors the CLI's TxCmd)
 // ---------------------------------------------------------------------------
 
-fn program_id_from_hex(hex_str: &str) -> anyhow::Result<lee_core::program::ProgramId> {
-    let bytes = hex::decode(hex_str.trim()).map_err(|e| anyhow::anyhow!("program_id hex: {e}"))?;
-    let arr: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("program_id must be 32 bytes, got {}", bytes.len()))?;
-    let mut words = [0u32; 8];
-    for (i, w) in words.iter_mut().enumerate() {
-        *w = u32::from_be_bytes([arr[i * 4], arr[i * 4 + 1], arr[i * 4 + 2], arr[i * 4 + 3]]);
-    }
-    Ok(words)
-}
 
 fn account_from_hex(hex_str: &str) -> anyhow::Result<lee_core::account::AccountId> {
     let bytes = hex::decode(hex_str.trim()).map_err(|e| anyhow::anyhow!("account hex: {e}"))?;
@@ -272,12 +267,23 @@ fn account_from_hex(hex_str: &str) -> anyhow::Result<lee_core::account::AccountI
     Ok(lee_core::account::AccountId::new(arr))
 }
 
+/// The configured deployed program account, or an error telling the caller to
+/// record one (the address a deploy produced).
+fn require_program_account(st: &AppState) -> anyhow::Result<lee_core::account::AccountId> {
+    if st.program_account_hex.trim().is_empty() {
+        anyhow::bail!(
+            "program_account_hex is not set: deploy the program, then open with the account \
+             address the deployment returned"
+        );
+    }
+    account_from_hex(&st.program_account_hex)
+}
+
 /// The wallet-submittable form of a built tx: the program account (target),
 /// the shard selectors in guest order, the account that must sign, and the
 /// borsh-encoded instruction.
-fn tx_json(st: &AppState, built: &OsmTxBuilt, signer: &lee_core::account::AccountId) -> Value {
+fn tx_json(built: &OsmTxBuilt, signer: &lee_core::account::AccountId) -> Value {
     json!({
-        "program_id_hex": st.program_id_hex,
         "program_account_hex": hex::encode(built.program_account_id.value()),
         "accounts_hex": built
             .accounts
@@ -350,7 +356,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
                 "geofabrik_url": st.geofabrik_url,
                 "cache_dir": st.cache_dir,
                 "memory_storage": st.memory,
-                "program_id_hex": st.program_id_hex,
+                "program_account_hex": st.program_account_hex,
                 "catalog": client(st).catalog().len(),
             }))
         }),
@@ -413,7 +419,7 @@ fn op_open(args: &Value) -> *mut c_char {
             .get("memory")
             .and_then(|m| m.as_bool())
             .unwrap_or(false),
-        program_id_hex: DOCUMENTED_PROGRAM_ID_HEX.to_string(),
+        program_account_hex: String::new(),
         state_path: state_path.clone(),
     });
     // Refresh any provided config (lets the app re-point at live endpoints).
@@ -431,12 +437,12 @@ fn op_open(args: &Value) -> *mut c_char {
     if let Some(v) = args.get("memory").and_then(|m| m.as_bool()) {
         st.memory = v;
     }
-    if let Some(v) = str_arg(args, "program_id_hex") {
+    if let Some(v) = str_arg(args, "program_account_hex") {
         // Validate early so a typo can't poison every later tx build.
-        if let Err(e) = program_id_from_hex(&v) {
-            return err(format!("program_id_hex: {e}"));
+        if let Err(e) = account_from_hex(&v) {
+            return err(format!("program_account_hex: {e}"));
         }
-        st.program_id_hex = v;
+        st.program_account_hex = v;
     }
     st.state_path = state_path;
     let _ = std::fs::create_dir_all(&st.cache_dir);
@@ -445,7 +451,7 @@ fn op_open(args: &Value) -> *mut c_char {
         "geofabrik_url": st.geofabrik_url,
         "cache_dir": st.cache_dir,
         "memory_storage": st.memory,
-        "program_id_hex": st.program_id_hex,
+        "program_account_hex": st.program_account_hex,
         "catalog": client(&st).catalog().len(),
     });
     if let Err(e) = st.save() {
@@ -517,13 +523,13 @@ fn op_host(args: &Value) -> *mut c_char {
     if let Err(e) = c.catalog_record_hosted(&snap) {
         return err(format!("catalog: {e:#}"));
     }
-    let program_id = match program_id_from_hex(&st.program_id_hex) {
-        Ok(p) => p,
-        Err(e) => return err(format!("{e}")),
+    let program_account = match require_program_account(&st) {
+        Ok(a) => a,
+        Err(e) => return err(format!("{e:#}")),
     };
     let tx = registrar.as_ref().map(|reg| {
-        let built = build_register_region(&program_id, reg, &snap.registration(None));
-        tx_json(&st, &built, reg)
+        let built = build_register_region(&program_account, reg, &snap.registration(None));
+        tx_json(&built, reg)
     });
     ok(json!({
         "region": snap.region,
@@ -611,9 +617,9 @@ fn op_register(args: &Value) -> *mut c_char {
             bytes: 0,
             path: rec.path,
         };
-        let program_id = program_id_from_hex(&st.program_id_hex)?;
-        let built = build_register_region(&program_id, &registrar, &snap.registration(None));
-        Ok(tx_json(st, &built, &registrar))
+        let program_account = require_program_account(st)?;
+        let built = build_register_region(&program_account, &registrar, &snap.registration(None));
+        Ok(tx_json(&built, &registrar))
     })
 }
 
@@ -651,9 +657,9 @@ fn op_register_bulk(args: &Value) -> *mut c_char {
             };
             regs.push(snap.registration(None));
         }
-        let program_id = program_id_from_hex(&st.program_id_hex)?;
-        let built = build_register_regions_batch(&program_id, &registrar, &regs);
-        Ok(tx_json(st, &built, &registrar))
+        let program_account = require_program_account(st)?;
+        let built = build_register_regions_batch(&program_account, &registrar, &regs);
+        Ok(tx_json(&built, &registrar))
     })
 }
 
@@ -667,9 +673,9 @@ fn op_init(args: &Value) -> *mut c_char {
         Err(e) => return err(format!("owner_hex: {e}")),
     };
     with_state(args, |st| {
-        let program_id = program_id_from_hex(&st.program_id_hex)?;
-        let built = build_init(&program_id, &owner);
-        Ok(tx_json(st, &built, &owner))
+        let program_account = require_program_account(st)?;
+        let built = build_init(&program_account, &owner);
+        Ok(tx_json(&built, &owner))
     })
 }
 
@@ -746,13 +752,13 @@ fn op_import(args: &Value) -> *mut c_char {
         if let Err(e) = c.catalog_record_hosted(&snap) {
             return err(format!("catalog: {e:#}"));
         }
-        let program_id = match program_id_from_hex(&st.program_id_hex) {
-            Ok(p) => p,
-            Err(e) => return err(format!("{e}")),
+        let program_account = match require_program_account(&st) {
+            Ok(a) => a,
+            Err(e) => return err(format!("{e:#}")),
         };
         let tx = registrar.as_ref().map(|reg| {
-            let built = build_register_region(&program_id, reg, &snap.registration(None));
-            tx_json(&st, &built, reg)
+            let built = build_register_region(&program_account, reg, &snap.registration(None));
+            tx_json(&built, reg)
         });
         ok(json!({
             "region": snap.region,
@@ -834,6 +840,10 @@ mod tests {
         serde_json::from_str(&s).unwrap_or(Value::Null)
     }
 
+    /// The program account the tests configure (hex, 32 bytes).
+    const PROGRAM_ACCOUNT_HEX: &str =
+        "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+
     fn fresh_state() -> (String, String) {
         let dir = tempfile::tempdir().unwrap();
         let nano = std::time::SystemTime::now()
@@ -857,7 +867,13 @@ mod tests {
         // Open (in-memory storage; offline).
         let r = invoke(
             "open",
-            &json!({ "state_path": state, "cache_dir": cache, "memory": true }),
+            &json!({
+                "state_path": state,
+                "cache_dir": cache,
+                "memory": true,
+                // The address a deployment would have returned.
+                "program_account_hex": PROGRAM_ACCOUNT_HEX,
+            }),
         );
         assert!(
             r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -889,8 +905,8 @@ mod tests {
             "{r}"
         );
         assert_eq!(
-            r["result"]["program_id_hex"].as_str().unwrap(),
-            DOCUMENTED_PROGRAM_ID_HEX
+            r["result"]["program_account_hex"].as_str().unwrap(),
+            PROGRAM_ACCOUNT_HEX
         );
         assert_eq!(r["result"]["encoding"].as_str().unwrap(), "borsh");
         // The instruction is borsh bytes now; decode them back (the guest's
@@ -906,7 +922,7 @@ mod tests {
         // bad program id rejected at open.
         let r = invoke(
             "open",
-            &json!({ "state_path": state, "program_id_hex": "zz" }),
+            &json!({ "state_path": state, "program_account_hex": "zz" }),
         );
         assert!(!r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
         // unknown op.
@@ -915,14 +931,11 @@ mod tests {
     }
 
     #[test]
-    fn ffi_program_id_round_trip() {
-        let pid = program_id_from_hex(DOCUMENTED_PROGRAM_ID_HEX).unwrap();
-        // Round trip: words back to the same hex.
-        let mut bytes = Vec::with_capacity(32);
-        for w in pid {
-            bytes.extend_from_slice(&w.to_be_bytes());
-        }
-        assert_eq!(hex::encode(bytes), DOCUMENTED_PROGRAM_ID_HEX);
-        assert!(program_id_from_hex("0123").is_err());
+    fn program_account_round_trip() {
+        // The configured program account parses back to the same 32 bytes.
+        let hex_id = "0f".repeat(32);
+        let a = account_from_hex(&hex_id).unwrap();
+        assert_eq!(hex::encode(a.value()), hex_id);
+        assert!(account_from_hex("0123").is_err());
     }
 }

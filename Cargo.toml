@@ -25,6 +25,12 @@ wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git",
 token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.0" }
 test_fixtures = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.0" }
 test_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.0" }
+# The v0.3 deploy flow creates a header account plus one segment account per
+# segment, so the tests need the segment-size constant.
+program_loader_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.0" }
+# Read-only chain access for the CLI's lookup command (getAccount over the
+# sequencer's JSON-RPC), so a query needs no wallet.
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.3.0", features = ["client"] }
 
 # ---- crypto / hashing ----
 sha2 = "0.10"

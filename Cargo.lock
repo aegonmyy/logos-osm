@@ -5859,11 +5859,13 @@ name = "logos-osm-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "borsh",
  "clap",
  "hex",
  "lee_core",
  "logos-osm",
  "osm-registry",
+ "sequencer_service_rpc",
  "serde",
  "serde_json",
  "tokio",
@@ -6891,6 +6893,7 @@ dependencies = [
  "logos-osm",
  "osm-core",
  "osm-registry",
+ "program_loader_core",
  "risc0-zkvm",
  "serde_json",
  "tempfile",

@@ -21,7 +21,7 @@
 use anyhow::{Result, bail};
 use lee::program::Program;
 use lee_core::account::{AccountId, ShardData};
-use lee_core::frame::from_frame;
+use lee_core::from_frame;
 use lee_core::program::{
     AccountMeta, ApplyInput, GuestOutput, PdaSeed, PlanInput, ProgramId, ShardEffect,
 };
@@ -119,7 +119,11 @@ fn run_plan(input: &PlanInput) -> Result<(Measured, Vec<ShardEffect>)> {
         user_cycles: session.user_cycles,
         total_cycles: session.total_cycles,
     };
-    let output: GuestOutput = decode_journal(&session.journal.bytes)?;
+    let journal = session
+        .journal
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("plan session produced no journal"))?;
+    let output: GuestOutput = decode_journal(&journal.bytes)?;
     let GuestOutput::Plan(plan) = output else {
         bail!("plan phase produced an apply output");
     };
@@ -137,7 +141,11 @@ fn run_apply(input: &ApplyInput) -> Result<(Measured, Option<ShardData>)> {
         user_cycles: session.user_cycles,
         total_cycles: session.total_cycles,
     };
-    let output: GuestOutput = decode_journal(&session.journal.bytes)?;
+    let journal = session
+        .journal
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("apply session produced no journal"))?;
+    let output: GuestOutput = decode_journal(&journal.bytes)?;
     let GuestOutput::Apply(apply) = output else {
         bail!("apply phase produced a plan output");
     };
@@ -196,6 +204,9 @@ fn registration(region: &str, version: u32, ts: u64) -> RegionRegistration {
     RegionRegistration {
         region: region.into(),
         cid: format!("cid-{region}"),
+        source_url: osm_core::set::by_path(region)
+            .map(|r| r.source_url().to_string())
+            .unwrap_or_default(),
         checksum: [0x5a; 16],
         version,
         timestamp: ts,
@@ -250,6 +261,7 @@ fn cycle_profile_per_instruction() -> Result<()> {
             Mirror {
                 registrar: [1; 32],
                 cid: "cid-1".into(),
+                source_url: "https://download.geofabrik.de/europe/germany-latest.osm.pbf".into(),
                 checksum: [0; 16],
                 version: 20260701,
                 timestamp: 100,
@@ -258,6 +270,7 @@ fn cycle_profile_per_instruction() -> Result<()> {
             Mirror {
                 registrar: [2; 32],
                 cid: "cid-2".into(),
+                source_url: "https://download.geofabrik.de/europe/germany-latest.osm.pbf".into(),
                 checksum: [0; 16],
                 version: 20260801,
                 timestamp: 200,

@@ -15,6 +15,7 @@ logos-osm = { path = "../osm-sdk" }
 osm-registry = { path = "../methods/osm-host" }
 lee_core.workspace = true
 wallet.workspace = true
+sequencer_service_rpc.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
@@ -23,3 +24,4 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 hex.workspace = true
+borsh.workspace = true

@@ -16,13 +16,16 @@ anyhow.workspace = true
 serde_json.workspace = true
 borsh.workspace = true
 bytes.workspace = true
+# Used by the lib's `deploy_program` helper (the v0.3 deploy flow), so they
+# belong to the library target, not only the test targets.
+wallet.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+program_loader_core.workspace = true
 
 [dev-dependencies]
 # Live harness: spins up bedrock + sequencer + indexer + wallet. Heavy build.
 test_fixtures.workspace = true
-wallet.workspace = true
-lee.workspace = true
-lee_core.workspace = true
 # The embedded OSM-registry ELF + program id (so the test deploys the exact
 # binary the guest crate produces) and the shared instruction types.
 osm-registry = { path = "../methods/osm-host" }
