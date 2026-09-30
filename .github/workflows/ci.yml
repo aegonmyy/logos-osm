@@ -1,9 +1,9 @@
 name: CI
 
+# Manual trigger only. The real-proof job runs the whole lifecycle at
+# RISC0_DEV_MODE=0 and takes hours, so the suite is run deliberately rather
+# than on every push.
 on:
-  push:
-    branches: [main, master]
-  pull_request:
   workflow_dispatch:
 
 env:
@@ -15,9 +15,7 @@ env:
 jobs:
   unit-tests:
     name: Build + unit tests
-    # Self-hosted runner on the logos-box (this account's hosted-runner jobs
-    # are blocked by a billing gate, and self-hosted runners are free).
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - name: Free runner disk space
         # The wallet stack's librocksdb-sys + the risc0 toolchain + the
@@ -25,8 +23,8 @@ jobs:
         # (observed on the sibling vault repo: cc-rs "No space left on
         # device" while archiving librocksdb.a). Self-hosted box: ample disk.
         run: |
-          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
-            echo "self-hosted runner: skipping disk reclamation"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "not a hosted runner: skipping disk reclamation"
             exit 0
           fi
           df -h /
@@ -38,15 +36,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (1.94)
+      - name: Install Rust (1.98.1)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.98.1
           components: rustfmt, clippy
 
       - name: Install system deps
         # Already present on the self-hosted box; skip the apt update there.
-        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -85,7 +83,7 @@ jobs:
 
   live-e2e:
     name: Live LEZ e2e (Docker sequencer + real Codex)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # The full registry lifecycle against a standalone LEZ sequencer brought
     # up by test_fixtures::TestContext (heavy, ~5-6 min) plus the off-chain
     # lifecycle against a real Codex storage container.
@@ -95,8 +93,8 @@ jobs:
         # sequencer's funding backend 500s ("Requested wallet state for
         # unknown block") and txs never get included. Self-hosted: skip.
         run: |
-          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
-            echo "self-hosted runner: skipping disk reclamation"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "not a hosted runner: skipping disk reclamation"
             exit 0
           fi
           df -h /
@@ -109,16 +107,16 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (1.94)
+      - name: Install Rust (1.98.1)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.98.1
 
       - name: Install risc0 toolchain
         # The self-hosted box already has cargo-risczero 3.0.5 / r0vm 3.0.5 /
         # rust 1.97.0 installed (it is the logos-agent build box); skip the
         # download there.
-        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
+        if: runner.environment == 'github-hosted'
         run: |
           curl -L https://risczero.com/install | bash
           export PATH="$HOME/.risc0/bin:$PATH"
@@ -137,7 +135,7 @@ jobs:
           echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
 
       - name: Install system deps
-        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -181,14 +179,14 @@ jobs:
 
   cycle-profile:
     name: CU cycle profile (local executor)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # Real per-instruction guest cycle counts through the risc0 local
     # executor — the numbers behind docs/CU_COSTS.md (single vs batch).
     steps:
       - name: Free runner disk space
         run: |
-          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
-            echo "self-hosted runner: skipping disk reclamation"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "not a hosted runner: skipping disk reclamation"
             exit 0
           fi
           df -h /
@@ -200,13 +198,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Rust (1.94)
+      - name: Install Rust (1.98.1)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
+          toolchain: 1.98.1
 
       - name: Install system deps
-        if: env.RUNNER_IS_GITHUB_HOSTED == 'true'
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler libpcsclite-dev
 
       - uses: Swatinem/rust-cache@v2
@@ -220,14 +218,14 @@ jobs:
     # The nix-built plugin .so links against a newer glibc than ubuntu-22.04
     # ships (2.35); the smoke dlopens it, so it needs glibc >= 2.38. The
     # self-hosted box is Ubuntu 26.04 with glibc 2.43, so it qualifies.
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - name: Free runner disk space
         # The nix store (Qt toolchain + module deps) grows into the same
         # ~14 GB a hosted runner offers; self-hosted box has ample disk.
         run: |
-          if [ "${RUNNER_IS_GITHUB_HOSTED:-}" != "true" ]; then
-            echo "self-hosted runner: skipping disk reclamation"
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "not a hosted runner: skipping disk reclamation"
             exit 0
           fi
           df -h /

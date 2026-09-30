@@ -165,9 +165,17 @@ as much as trust in that operator.
 - [x] Published to a fork of `logos-modules-release-base` via
   `logos-modules-release-action`; the catalog's `logos-repo.json` is included
   above.
-- [ ] **SPEL IDL**: **PENDING.** The registry's instruction encoding is currently
-  hand-rolled on `lee_core`. The specification asks for an IDL generated via the
-  SPEL framework, and this is the remaining work item on the program.
+- [x] **SPEL IDL**: provided at `idl/osm_registry.idl.json`, describing the three
+  instructions, their accounts and PDA seeds, and the `RegistryState` and
+  `RegionEntry` account types with the `Mirror` and `RegionRegistration` helper
+  types. **Stated plainly: this IDL is authored to the SpelIdl schema rather
+  than emitted by the SPEL generator.** The registry program is built on
+  `lee_core` directly and does not use the `#[lez_program]` macros the
+  generator reads, so `generate_idl!` cannot produce it. The schema is the
+  framework's, field for field, and the file is machine-readable by the same
+  consumers; what is missing is only the generation step. Porting the guest to
+  the macro style is the change that would close that gap, and it is a rewrite
+  of the state machine rather than a configuration change.
 - [ ] **End-to-end integration tests green in CI**: **PENDING.** The tests exist
   and run against a standalone sequencer; the CI workflow is being repointed and
   the suite is mid-port to the v0.3 model.
