@@ -1,0 +1,27 @@
+// RemoteObjects source for the consumer example.
+//
+// This module depends on exactly one thing: the `osm` core module. It uses
+// the consumer subset of that module's API — enumerate the region set, and
+// resolve one region to the CID and metadata the registry records for it.
+// It never hosts, registers, or fetches bytes, which is the shape a viewer,
+// a router, or any other app that wants map data actually needs.
+class OsmConsumer
+{
+    // The region set as JSON: [{path, name, continent, level, pbfUrl}, ...]
+    PROP(QString regionsJson="[]" READONLY)
+
+    // The resolved region's on-chain entry as JSON, or "" before a lookup.
+    PROP(QString resolvedJson="" READONLY)
+
+    // Last error message (empty on success).
+    PROP(QString lastErr="" READONLY)
+
+    // True once the region list has been read from the SDK.
+    PROP(bool ready=false READONLY)
+
+    // Read the region set through the SDK and populate regionsJson.
+    SLOT(QString loadRegions())
+
+    // Resolve one region to its CID/metadata and populate resolvedJson.
+    SLOT(QString resolveRegion(QString regionPath))
+}

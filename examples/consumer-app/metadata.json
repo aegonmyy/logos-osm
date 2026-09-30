@@ -1,0 +1,27 @@
+{
+  "name": "osm_consumer",
+  "display_name": "Map Regions (consumer example)",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "example",
+  "description": "Minimal embedding example: a Basecamp module that depends only on the OSM SDK module and uses the consumer subset of its API to resolve a region to the CID and metadata the registry records for it. It hosts nothing and registers nothing, which is the shape most apps that want map data will take. Build with logos-module-builder and load it in Basecamp alongside the `osm` module.",
+  "main": "osm_consumer_plugin",
+  "interface": "universal",
+  "view": "qml/Main.qml",
+  "dependencies": [
+    "osm"
+  ],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

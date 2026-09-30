@@ -18,6 +18,7 @@ lee.workspace = true
 lee_core.workspace = true
 # AccountIdentity for mapping built txs onto wallet signing sets.
 wallet.workspace = true
+sequencer_service_rpc.workspace = true
 risc0-zkvm.workspace = true
 sha2.workspace = true
 md-5 = { workspace = true, features = ["asm"] }

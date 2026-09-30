@@ -35,10 +35,21 @@
         flakeInputs = inputs // { osm = osmModule; };
       };
 
+      # The minimal embedding example: a Basecamp module that depends only on
+      # the SDK module and uses the consumer subset of its API to resolve a
+      # region to the CID the registry records for it. This is the shape the
+      # prize asks other modules to copy.
+      osmConsumerModule = logos-module-builder.lib.mkLogosQmlModule {
+        src = ./examples/consumer-app;
+        configFile = ./examples/consumer-app/metadata.json;
+        flakeInputs = inputs // { osm = osmModule; };
+      };
+
       packagesFor = system:
         let
           osmPkgs = osmModule.packages.${system} or {};
           appPkgs = osmAppModule.packages.${system} or {};
+          consumerPkgs = osmConsumerModule.packages.${system} or {};
           prefix = tag: set:
             nixpkgs.lib.mapAttrs' (k: v: nixpkgs.lib.nameValuePair "${tag}-${k}" v) set;
         in
@@ -51,7 +62,8 @@
           # osm-lgx-portable and broke all four build legs.
           osmPkgs
           // prefix "osm" osmPkgs
-          // prefix "osm-app" appPkgs;
+          // prefix "osm-app" appPkgs
+          // prefix "osm-consumer" consumerPkgs;
     in {
       packages = nixpkgs.lib.genAttrs supportedSystems packagesFor;
     };

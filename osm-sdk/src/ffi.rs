@@ -99,6 +99,8 @@ struct AppState {
     /// recorded; tx-building ops require it, because v0.3 addresses a program
     /// by its chosen account, not by its image id.
     program_account_hex: String,
+    /// LEZ sequencer JSON-RPC endpoint, read by the `lookup` op.
+    sequencer_url: String,
     state_path: String,
 }
 
@@ -378,6 +380,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
         "fetch" => op_fetch(args),
         "import" => op_import(args),
         "update" => op_update(args),
+        "lookup" => op_lookup(args),
         "catalog" => with_state(args, |st| {
             Ok(client(st)
                 .catalog()
@@ -420,6 +423,8 @@ fn op_open(args: &Value) -> *mut c_char {
             .and_then(|m| m.as_bool())
             .unwrap_or(false),
         program_account_hex: String::new(),
+        sequencer_url: str_arg(args, "sequencer_url")
+            .unwrap_or_else(|| "https://testnet.lez.logos.co".to_string()),
         state_path: state_path.clone(),
     });
     // Refresh any provided config (lets the app re-point at live endpoints).
@@ -436,6 +441,9 @@ fn op_open(args: &Value) -> *mut c_char {
     }
     if let Some(v) = args.get("memory").and_then(|m| m.as_bool()) {
         st.memory = v;
+    }
+    if let Some(v) = str_arg(args, "sequencer_url") {
+        st.sequencer_url = v;
     }
     if let Some(v) = str_arg(args, "program_account_hex") {
         // Validate early so a typo can't poison every later tx build.
@@ -778,6 +786,64 @@ fn op_import(args: &Value) -> *mut c_char {
             Err(e) => err(format!("import: {e:#}")),
         }
     }
+}
+
+/// Resolve a region to its on-chain registry entry: the CID, source URL,
+/// checksum, version and mirrors recorded for it. This is the consumer path —
+/// a Basecamp app that wants map data needs to turn a region into a CID, not
+/// to host anything.
+///
+/// Reads the sequencer directly over JSON-RPC, so it needs no wallet.
+fn op_lookup(args: &Value) -> *mut c_char {
+    let Some(region) = str_arg(args, "region") else {
+        return err("lookup requires region");
+    };
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let program_account = match require_program_account(&st) {
+        Ok(a) => a,
+        Err(e) => return err(format!("{e:#}")),
+    };
+
+    let pda = crate::registry::region_pda(&program_account, &region);
+    let account = match block_on(async {
+        let client = sequencer_service_rpc::SequencerClientBuilder::default()
+            .build(st.sequencer_url.clone())
+            .map_err(|e| anyhow::anyhow!("sequencer {}: {e}", st.sequencer_url))?;
+        use sequencer_service_rpc::RpcClient as _;
+        client
+            .get_account(pda)
+            .await
+            .map_err(|e| anyhow::anyhow!("reading {region}: {e}"))
+    }) {
+        Ok(a) => a,
+        Err(e) => return err(format!("{e:#}")),
+    };
+
+    let shard = account.data.shard(program_account);
+    if shard.as_ref().is_empty() {
+        return err(format!("{region} is not registered on chain"));
+    }
+    let entry: crate::registry::RegionEntry = match borsh::from_slice(shard.as_ref()) {
+        Ok(e) => e,
+        Err(e) => return err(format!("decoding {region}: {e}")),
+    };
+    let latest = entry.latest_mirror();
+    ok(json!({
+        "region": entry.region,
+        "parent": entry.parent,
+        "level": entry.level,
+        "mirrors": entry.mirrors.len(),
+        "registrars": entry.registrars().len(),
+        "latest": latest.map(|m| json!({
+            "cid": m.cid,
+            "source_url": m.source_url,
+            "checksum": hex::encode(m.checksum),
+            "version": m.version,
+            "timestamp": m.timestamp,
+        })),
+    }))
 }
 
 /// Check whether a newer snapshot is published upstream.
