@@ -1,0 +1,274 @@
+{
+  "version": "0.1.0",
+  "name": "osm_registry",
+  "instructions": [
+    {
+      "name": "init",
+      "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "/OSM/REGISTRY/V1/SEED/0000000000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "owner",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_region",
+      "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "/OSM/REGISTRY/V1/SEED/0000000000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "region",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "registration.region"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registrar",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "registration",
+          "type": {
+            "defined": "RegionRegistration"
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_regions_batch",
+      "accounts": [
+        {
+          "name": "registry",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "/OSM/REGISTRY/V1/SEED/0000000000"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registrar",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "region",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "rest": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "arg",
+                "path": "registrations[i].region"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "registrations",
+          "type": {
+            "vec": {
+              "defined": "RegionRegistration"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "RegistryState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "regions",
+            "type": {
+              "vec": "string"
+            }
+          },
+          {
+            "name": "registration_count",
+            "type": "u64"
+          },
+          {
+            "name": "initialized",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RegionEntry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "region",
+            "type": "string"
+          },
+          {
+            "name": "parent",
+            "type": "string"
+          },
+          {
+            "name": "level",
+            "type": "u8"
+          },
+          {
+            "name": "mirrors",
+            "type": {
+              "vec": {
+                "defined": "Mirror"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "Mirror",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "registrar",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "cid",
+          "type": "string"
+        },
+        {
+          "name": "checksum",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "version",
+          "type": "u32"
+        },
+        {
+          "name": "timestamp",
+          "type": "u64"
+        },
+        {
+          "name": "hosted",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "RegionRegistration",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "region",
+          "type": "string"
+        },
+        {
+          "name": "cid",
+          "type": "string"
+        },
+        {
+          "name": "checksum",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "version",
+          "type": "u32"
+        },
+        {
+          "name": "timestamp",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "errors": []
+}
