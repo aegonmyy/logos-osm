@@ -6,9 +6,13 @@
 //! storage (Geofabrik fallback), import locally, and check for updates.
 //!
 //! On-chain submission follows the wallet pattern: the CLI **builds** the
-//! transaction (accounts + risc0-serde instruction words, printed as JSON)
-//! and the wallet submits it — the SDK stays transport-agnostic, and the
+//! transaction (the deployed program's account, the shard selectors, the
+//! signing account, and borsh-encoded instruction bytes, printed as JSON) and
+//! the wallet submits it — the SDK stays transport-agnostic, and the
 //! integration test performs the actual on-chain submission end to end.
+//!
+//! `lookup` is the exception: it reads the registry straight from the
+//! sequencer over JSON-RPC, so a query needs no wallet and no local state.
 
 use std::path::PathBuf;
 
