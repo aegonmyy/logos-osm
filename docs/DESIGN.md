@@ -74,26 +74,53 @@ proof, the CID is the network pointer.
 
 ## 4. Registry program model
 
-One guest program, two account families, all PDAs (LEZ has no account
+One guest program, two shard families, all PDAs (LEZ has no account
 attributes / program-derived niceties beyond this — see the LEZ facts):
-- registry PDA — seed `/OSM/REGISTRY/V1/SEED/0000000000`, holds `RegistryState`
-  (owner, region_count, registration_count);
-- one region PDA per region — seed `SHA-256("osm-region:" || path)`, holds
+- registry PDA — seed `/OSM/REGISTRY/V1/SEED/0000000000`, holding
+  `RegistryState` (owner, the covered region paths, registration_count,
+  initialized);
+- one region PDA per region — seed `SHA-256("osm-region:" || path)`, holding
   `RegionEntry` with the full append-only mirror history.
 
-`RegisterRegion` appends `Mirror { registrar, cid, checksum, version,
-timestamp, hosted }`. Mirror history is timestamp-ordered and capped at
-`MAX_MIRRORS = 32` (oldest pruned) so a hot region's account can't grow
-unboundedly. Region vs registration counts: registering an existing region
-increments only `registration_count` — the adoption metrics (distinct
-registrars per region, advancing versions) are computed from the region
-entry's mirror list, not the global counters.
+**The v0.3 program model shapes everything here.** A program no longer
+returns post-states that replace an account; it runs as `plan` plus `apply`:
 
-`RegisterRegionsBatch` (cap `MAX_BATCH = 24`) amortizes tx overhead for bulk
-hosting: one registry-account write + one registrar nonce for N regions. The
-cap keeps the instruction within tx-size and per-tx compute bounds; the CU
-profile (`docs/CU_COSTS.md`) measures the amortization curve and shows where
-it flattens.
+- `plan` sees the instruction and the account *metadata* (ids and whether the
+  signer authorised), never account contents. It validates what metadata can
+  establish — that the registry and region accounts really are the PDAs this
+  program derives, that the registrar signed — and emits one **effect** per
+  shard it writes.
+- `apply` runs once per emitted effect with that shard's **pre-data**,
+  enforces the state preconditions (registry initialized, version in range,
+  the source URL matches the table), and returns the shard's new contents. A
+  failed precondition rejects the transaction.
+
+Two consequences worth stating because they look like omissions otherwise:
+
+- **The registry tracks the covered paths itself.** A shard's `apply` cannot
+  see another shard, so the registry cannot look at a region to learn whether
+  it is new. It keeps the list, and `region_count()` is its length. The list
+  is bounded by the closed set.
+- **There is no registrar claim.** v0.2 needed `Claim::Authorized` on first
+  touch, because a program owned whole accounts and a signer's second
+  transaction would fail with `NonDefaultAccountWithDefaultOwner`. v0.3
+  writes only the program's own shard, so there is nothing to claim and the
+  pattern is gone.
+
+`RegisterRegion` appends `Mirror { registrar, cid, source_url, checksum,
+version, timestamp, hosted }`. The `source_url` is asserted against the
+frozen table, so a registration cannot record a pointer at some other
+extract. Mirror history is timestamp-ordered and capped at `MAX_MIRRORS = 32`
+(oldest pruned) so a hot region's account can't grow unboundedly. Registering
+an existing region increments only `registration_count`; the adoption metrics
+(distinct registrars per region, advancing versions) are read from the region
+shard's mirror list rather than from any global counter.
+
+`RegisterRegionsBatch` (cap `MAX_BATCH = 24`) amortizes overhead for bulk
+hosting: one registry effect carrying all the paths, plus one region effect
+per region. The cap keeps the instruction within tx-size and per-tx compute
+bounds; the CU profile (`docs/CU_COSTS.md`) measures the amortization curve
+and shows where it flattens.
 
 **Permissionless by design.** Anyone can mirror any region in the set. No
 owner approval step exists because the prize's adoption criteria are about
@@ -116,9 +143,9 @@ append-only ledger".
   code run against the hermetic fixture server in CI and the real Geofabrik
   in production — no URL plumbing through the call graph, no test-only code
   paths in the SDK.
-- The wallet boundary: the SDK **builds** transactions (accounts +
-  risc0-serde instruction words, serialized as JSON) and the wallet
-  **submits**. The SDK holds no keys and never signs; the FFI exports exactly
+- The wallet boundary: the SDK **builds** transactions (the deployed
+  program's account, shard selectors, the signing account, and borsh-encoded
+  instruction bytes, serialized as JSON) and the wallet **submits**. The SDK holds no keys and never signs; the FFI exports exactly
   this shape. The full submit path is proven by
   `tests/tests/osm_registry_live.rs`, which drives the real standalone
   sequencer end-to-end (deploy → Init → germany by 3 registrars → batch →
