@@ -23,19 +23,19 @@ use lee::ProgramId;
 use lee_core::account::AccountId;
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
-    decode_registry_state, region_pda, registry_pda, to_identities, RegionRegistration,
+    decode_registry_state, region_pda, registry_pda, RegionRegistration,
 };
 use wallet::cli::{
     account::{AccountSubcommand, NewSubcommand},
     Command, SubcommandReturnValue,
 };
 use wallet::config::{SequencerConnectionData, WalletConfigOverrides};
-use wallet::{AccountIdentity, WalletCore};
+use wallet::WalletCore;
 
 /// The documented deterministic program id (README / docs). The testnet
 /// deployment must reproduce it — same committed ELF, same PDA derivation.
 const EXPECTED_PROGRAM_ID_HEX: &str =
-    "77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0";
+    "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
 
 fn testnet_url() -> String {
     std::env::var("OSM_TESTNET_URL").unwrap_or_else(|_| "https://testnet.lez.logos.co".to_owned())
@@ -71,14 +71,6 @@ macro_rules! net_retry {
     }};
 }
 
-/// A built tx mapped to wallet identities: the signer signs, PDAs unsigned.
-fn to_live(
-    built: &logos_osm::registry::OsmTxBuilt,
-    signer: &AccountId,
-) -> (Vec<AccountIdentity>, Vec<u32>) {
-    (to_identities(built, signer), built.instruction.clone())
-}
-
 async fn send_and_await(
     wallet: &mut WalletCore,
     built: &logos_osm::registry::OsmTxBuilt,
@@ -86,9 +78,12 @@ async fn send_and_await(
     program_id: ProgramId,
     label: &str,
 ) -> Result<()> {
-    let (identities, instruction) = to_live(built, signer);
+    // v0.3: shard-scoped account mentions + borsh instruction + the target
+    // program's account id. `program_id` stays for the deploy/id checks.
+    let _ = program_id;
+    let mentions = built.mentions(signer);
     let h = wallet
-        .send_pub_tx(identities, instruction, program_id)
+        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
         .await
         .map_err(|e| anyhow::anyhow!("{label} send_pub_tx failed: {e:?}"))?;
     net_retry!(wallet.poll_transaction(h), &format!("{label}-poll"));
@@ -277,7 +272,7 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
         let acc = wallet.get_account_public(registry_pda(&program_id)).await?;
         decode_registry_state(acc.data.as_ref()).context("decoding final RegistryState")?
     };
-    assert_eq!(reg_state.region_count, 3);
+    assert_eq!(reg_state.region_count(), 3);
     assert_eq!(reg_state.registration_count, 3);
     println!(
         "testnet lifecycle OK: 3 regions, 3 registrations; program {got}; registry PDA {}",

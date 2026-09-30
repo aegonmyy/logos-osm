@@ -25,6 +25,7 @@
 pub mod set;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::ShardData;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -37,6 +38,14 @@ pub const MAX_MIRRORS: usize = 32;
 pub const MAX_BATCH: usize = 24;
 
 /// Registry state, borsh-serialized into the registry account's `data`.
+///
+/// Under the v0.3 LEE program model a program writes only *its own shard* on
+/// an account, and each account's shard is applied in its own `apply` call
+/// with no visibility into other accounts' shards. The registry shard
+/// therefore cannot observe a region shard to learn whether a region is new.
+/// It keeps the covered paths itself (`regions`), so the counts stay exact
+/// within a single shard and the registry doubles as an on-chain index of
+/// which regions of the closed set are covered.
 #[derive(
     Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -47,12 +56,22 @@ pub struct RegistryState {
     /// hosting the same region); the owner is recorded for provenance and
     /// future admin instructions.
     pub owner: [u8; 32],
-    /// Number of regions with at least one mirror ever registered.
-    pub region_count: u32,
+    /// Every region path with at least one mirror, sorted, deduplicated, and
+    /// bounded by the size of the predefined set.
+    pub regions: Vec<String>,
     /// Total registrations (mirror appends) ever accepted.
     pub registration_count: u64,
     /// `1` once `Init` has run.
     pub initialized: u8,
+}
+
+impl RegistryState {
+    /// Number of regions with at least one mirror ever registered.
+    #[must_use]
+    pub fn region_count(&self) -> u32 {
+        // The predefined set is small (72); a wider count cannot occur.
+        u32::try_from(self.regions.len()).expect("region set fits in u32")
+    }
 }
 
 /// One hosted mirror of a region snapshot, registered by one account.
@@ -162,6 +181,64 @@ pub mod abi {
     pub const INIT: u8 = 1;
     pub const REGISTER_REGION: u8 = 2;
     pub const REGISTER_REGIONS_BATCH: u8 = 3;
+}
+
+/// Per-shard effect data (the v0.3 model: `plan` emits one effect per account
+/// whose shard this program writes, and the runtime later runs `apply` for
+/// each effect with that shard's pre-data).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub enum Effect {
+    /// Applied on the registry shard. Initialize it, recording `owner`.
+    Init { owner: [u8; 32] },
+    /// Applied on the registry shard. Record that these region paths were
+    /// registered (idempotent per path) and bump the registration counter by
+    /// the number of registrations in the transaction.
+    RecordRegistrations {
+        paths: Vec<String>,
+        registrations: u64,
+    },
+    /// Applied on a region shard. Append one mirror. The registrar's account
+    /// id travels in the effect because `apply` sees only the shard data, not
+    /// the account metadata the signature authorized.
+    AppendMirror {
+        registrar: [u8; 32],
+        registration: RegionRegistration,
+    },
+}
+
+/// Max regions in the closed set; bounds the registry's covered-path list.
+pub const MAX_REGIONS: usize = 72;
+
+impl TryFrom<&ShardData> for RegistryState {
+    type Error = std::io::Error;
+
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+        Self::try_from_slice(data.as_ref())
+    }
+}
+
+impl From<&RegistryState> for ShardData {
+    fn from(state: &RegistryState) -> Self {
+        let mut data = Vec::with_capacity(std::mem::size_of_val(state));
+        BorshSerialize::serialize(state, &mut data).expect("Serialization to Vec should not fail");
+        Self::try_from(data).expect("Registry state encoded data should fit into ShardData")
+    }
+}
+
+impl TryFrom<&ShardData> for RegionEntry {
+    type Error = std::io::Error;
+
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+        Self::try_from_slice(data.as_ref())
+    }
+}
+
+impl From<&RegionEntry> for ShardData {
+    fn from(entry: &RegionEntry) -> Self {
+        let mut data = Vec::with_capacity(std::mem::size_of_val(entry));
+        BorshSerialize::serialize(entry, &mut data).expect("Serialization to Vec should not fail");
+        Self::try_from(data).expect("Region entry encoded data should fit into ShardData")
+    }
 }
 
 /// The PDA seed for a region account: `SHA-256("osm-region:" || path)`.

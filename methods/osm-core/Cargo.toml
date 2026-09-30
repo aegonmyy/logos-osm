@@ -10,3 +10,7 @@ description = "Shared on-chain types for the OSM registry LEZ program."
 borsh.workspace = true
 serde.workspace = true
 sha2.workspace = true
+# Decoding/encoding shard data uses the same non-borsh-array byte container the
+# LEZ program model reads and writes (`ShardData`), so this crate depends on the
+# LEZ core the way the token program's core crate does.
+lee_core.workspace = true

@@ -9,47 +9,52 @@
 //!
 //! ## Encoding contract with the guest
 //!
-//! The guest (`methods/osm`) decodes its instruction with
-//! `lee_core::program::read_lee_inputs::<osm_core::Instruction>()`, i.e.
-//! **risc0-serde** (`risc0_zkvm::serde::Deserializer`) over the transaction's
-//! `Vec<u32>` instruction words. This client therefore builds the typed
-//! [`Instruction`] and serializes it with `risc0_zkvm::serde::to_vec` — the
-//! mirror of the guest's decoder. The account list each instruction needs is
-//! derived here so the submitter passes exactly the accounts the guest
-//! asserts on, in order:
+//! Under the v0.3 program model the guest decodes its instruction with
+//! **borsh** (`osm_core::Instruction`), and each account is addressed by a
+//! `ProgramShardSelector` naming the account and the program shard the call
+//! writes. This client builds the typed [`Instruction`] and borsh-serializes
+//! it, and derives the shard selectors in the order the guest's `plan`
+//! expects:
 //!
 //! - `Init`: `[registry_pda, owner]`
 //! - `RegisterRegion`: `[registry_pda, region_pda, registrar]`
 //! - `RegisterRegionsBatch`: `[registry_pda, registrar, region_pda_0, …]`
 //!
-//! [`to_identities`] maps that list onto wallet identities: the signer is
-//! `Public` (signs), everything else `PublicNoSign` (read-only) — exactly the
-//! authorization set the guest asserts on.
+//! [`OsmTxBuilt::selectors`] produces the selector list; the registrar's
+//! signature (its presence in the transaction's witness set) is what sets
+//! `is_authorized` in the guest's account metadata.
 //!
 //! ## Queries
 //!
-//! The registry accounts are public; a reader (the CLI, the SDK facade)
+//! The registry shards are public; a reader (the CLI, the SDK facade)
 //! fetches the account bytes over the wallet/sequencer API and decodes with
 //! [`decode_region_entry`] / [`decode_registry_state`]. Query helpers here
 //! cover by-region, by-parent (subregion enumeration via the frozen table),
 //! and mirror lookup by CID.
 
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, ProgramShardSelector};
 use lee_core::program::{PdaSeed, ProgramId};
-use risc0_zkvm::serde::to_vec;
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, AccountMention};
 
 pub use osm_core::{
-    Instruction, Mirror, RegionEntry, RegionRegistration, RegistryState, MAX_BATCH, MAX_MIRRORS,
+    Effect, Instruction, MAX_BATCH, MAX_MIRRORS, Mirror, RegionEntry, RegionRegistration,
+    RegistryState,
 };
 
 /// The guest's fixed registry PDA seed (must match
 /// `methods/osm/src/bin/osm_registry.rs::REGISTRY_SEED`).
 pub const REGISTRY_SEED: [u8; 32] = *b"/OSM/REGISTRY/V1/SEED/0000000000";
 
+/// The program's on-chain account id, as the chain derives it from the
+/// deployed program id. The guest's `PlanInput.self_account_id` equals this,
+/// and PDAs are derived from it.
+pub fn program_account(program_id: &ProgramId) -> AccountId {
+    AccountId::from_builtin_program(*program_id)
+}
+
 /// Derive the registry PDA account id for a deployed program.
 pub fn registry_pda(program_id: &ProgramId) -> AccountId {
-    AccountId::for_public_pda(program_id, &PdaSeed::new(REGISTRY_SEED))
+    AccountId::for_public_pda(&program_account(program_id), &PdaSeed::new(REGISTRY_SEED))
 }
 
 /// Derive a region's PDA account id for `(program_id, region_path)`.
@@ -58,29 +63,64 @@ pub fn registry_pda(program_id: &ProgramId) -> AccountId {
 /// [`osm_core::region_seed`]) — the same derivation the guest asserts on.
 pub fn region_pda(program_id: &ProgramId, region_path: &str) -> AccountId {
     AccountId::for_public_pda(
-        program_id,
+        &program_account(program_id),
         &PdaSeed::new(osm_core::region_seed(region_path)),
     )
 }
 
-/// An instruction plus the exact accounts the guest asserts on, ready for the
-/// wallet's public-transaction submission.
+/// An instruction plus the exact accounts the guest's `plan` expects, ready
+/// for the wallet's public-transaction submission.
 #[derive(Clone, Debug)]
 pub struct OsmTxBuilt {
-    /// Account ids in the order the guest's `execute` expects them.
+    /// The program account (transaction target).
+    pub program_account_id: AccountId,
+    /// Account ids in the order the guest's `plan` expects them.
     pub accounts: Vec<AccountId>,
-    /// risc0-serde-encoded `osm_core::Instruction` words.
-    pub instruction: Vec<u32>,
+    /// borsh-encoded `osm_core::Instruction`.
+    pub instruction: Vec<u8>,
 }
 
-fn words(i: &Instruction) -> Vec<u32> {
-    to_vec(i).expect("osm_core::Instruction serializes to risc0-serde words")
+impl OsmTxBuilt {
+    /// The shard selectors the transaction carries, in guest order. Every
+    /// selector names this program's shard: the PDAs are written by it, and
+    /// the registrar account is referenced for authorization only.
+    #[must_use]
+    pub fn selectors(&self) -> Vec<ProgramShardSelector> {
+        self.accounts
+            .iter()
+            .map(|a| ProgramShardSelector::new(*a, self.program_account_id))
+            .collect()
+    }
+
+    /// The wallet mentions for submission: `signer` signs,
+    /// every other account is referenced unsigned, and each is scoped to this
+    /// program's shard. The signer's signature is what sets `is_authorized` in
+    /// the guest's account metadata.
+    #[must_use]
+    pub fn mentions(&self, signer: &AccountId) -> Vec<AccountMention> {
+        self.accounts
+            .iter()
+            .map(|a| {
+                let identity = if a == signer {
+                    AccountIdentity::Public(*a)
+                } else {
+                    AccountIdentity::PublicNoSign(*a)
+                };
+                identity.select_program_shard(self.program_account_id)
+            })
+            .collect()
+    }
+}
+
+fn words(i: &Instruction) -> Vec<u8> {
+    borsh::to_vec(i).expect("osm_core::Instruction serializes with borsh")
 }
 
 /// Build `Init`: binds `owner` as the registry authority (provenance only —
 /// registration itself stays permissionless).
 pub fn build_init(program_id: &ProgramId, owner: &AccountId) -> OsmTxBuilt {
     OsmTxBuilt {
+        program_account_id: program_account(program_id),
         accounts: vec![registry_pda(program_id), *owner],
         instruction: words(&Instruction::Init {
             owner: *owner.value(),
@@ -95,6 +135,7 @@ pub fn build_register_region(
     registration: &RegionRegistration,
 ) -> OsmTxBuilt {
     OsmTxBuilt {
+        program_account_id: program_account(program_id),
         accounts: vec![
             registry_pda(program_id),
             region_pda(program_id, &registration.region),
@@ -123,27 +164,12 @@ pub fn build_register_regions_batch(
         accounts.push(region_pda(program_id, &r.region));
     }
     OsmTxBuilt {
+        program_account_id: program_account(program_id),
         accounts,
         instruction: words(&Instruction::RegisterRegionsBatch {
             registrations: registrations.to_vec(),
         }),
     }
-}
-
-/// Map a built tx's accounts to wallet identities: `signer` signs (`Public`),
-/// every other account (the PDAs) is passed unsigned (`PublicNoSign`).
-pub fn to_identities(built: &OsmTxBuilt, signer: &AccountId) -> Vec<AccountIdentity> {
-    built
-        .accounts
-        .iter()
-        .map(|a| {
-            if a == signer {
-                AccountIdentity::Public(*a)
-            } else {
-                AccountIdentity::PublicNoSign(*a)
-            }
-        })
-        .collect()
 }
 
 /// Decode a registry account's data bytes.
@@ -257,11 +283,11 @@ mod tests {
         assert_eq!(built.accounts.len(), 2);
         assert_eq!(built.accounts[0], registry_pda(&PROG));
         assert_eq!(built.accounts[1], owner);
+        assert_eq!(built.program_account_id, program_account(&PROG));
         assert!(!built.instruction.is_empty());
-        // Round-trip: the words decode back to the same instruction (this is
+        // Round-trip: the bytes decode back to the same instruction (this is
         // the guest's exact decode path).
-        let back: Instruction =
-            risc0_zkvm::serde::from_slice(&built.instruction).expect("decode init words");
+        let back: Instruction = borsh::from_slice(&built.instruction).expect("decode init");
         assert_eq!(back, Instruction::Init { owner: REGISTRAR });
     }
 
@@ -272,7 +298,7 @@ mod tests {
         assert_eq!(built.accounts[0], registry_pda(&PROG));
         assert_eq!(built.accounts[1], region_pda(&PROG, "germany"));
         assert_eq!(built.accounts[2], registrar());
-        let back: Instruction = risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
+        let back: Instruction = borsh::from_slice(&built.instruction).unwrap();
         assert_eq!(
             back,
             Instruction::RegisterRegion {
@@ -293,7 +319,7 @@ mod tests {
         for (i, r) in regs.iter().enumerate() {
             assert_eq!(built.accounts[2 + i], region_pda(&PROG, &r.region));
         }
-        let back: Instruction = risc0_zkvm::serde::from_slice(&built.instruction).unwrap();
+        let back: Instruction = borsh::from_slice(&built.instruction).unwrap();
         match back {
             Instruction::RegisterRegionsBatch { registrations } => {
                 assert_eq!(registrations, regs);
@@ -318,16 +344,15 @@ mod tests {
     }
 
     #[test]
-    fn identities_sign_only_the_registrar() {
+    fn selectors_name_the_program_shard() {
         let built = build_register_region(&PROG, &registrar(), &registration("kenya"));
-        let ids = to_identities(&built, &registrar());
-        assert_eq!(ids.len(), 3);
-        for (id, acct) in ids.iter().zip(built.accounts.iter()) {
-            if acct == &registrar() {
-                assert!(matches!(id, AccountIdentity::Public(_)));
-            } else {
-                assert!(matches!(id, AccountIdentity::PublicNoSign(_)));
-            }
+        let selectors = built.selectors();
+        assert_eq!(selectors.len(), 3);
+        for (sel, acct) in selectors.iter().zip(built.accounts.iter()) {
+            assert_eq!(sel.account_id, *acct);
+            // Every selector names this program's shard: the PDAs are written
+            // by it and the registrar is referenced for authorization.
+            assert_eq!(sel.program_account_id, program_account(&PROG));
         }
     }
 

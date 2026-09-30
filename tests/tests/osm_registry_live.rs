@@ -22,23 +22,13 @@ use anyhow::{bail, Context, Result};
 use lee_core::account::AccountId;
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
-    decode_registry_state, region_pda, registry_pda, to_identities, RegionRegistration,
+    decode_registry_state, region_pda, registry_pda, RegionRegistration,
 };
 use test_fixtures::{TestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
 use wallet::cli::{
     account::{AccountSubcommand, NewSubcommand},
     Command, SubcommandReturnValue,
 };
-use wallet::AccountIdentity;
-
-/// Map a built tx's accounts to wallet identities: the signer signs, the
-/// PDAs are read-only/unsigned.
-fn to_live(
-    built: &logos_osm::registry::OsmTxBuilt,
-    signer: &AccountId,
-) -> (Vec<AccountIdentity>, Vec<u32>) {
-    (to_identities(built, signer), built.instruction.clone())
-}
 
 async fn wait_block() {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -66,11 +56,16 @@ async fn submit(
     signer: &AccountId,
     what: &str,
 ) -> Result<()> {
-    let (identities, instruction) = to_live(built, signer);
-    let program_id = osm_registry::osm_registry_id();
+    // v0.3: the wallet takes shard-scoped account mentions, the borsh
+    // instruction bytes, and the target program's *account* id.
+    let mentions = built.mentions(signer);
     let h = ctx
         .wallet_mut()
-        .send_pub_tx(identities, instruction, program_id)
+        .send_pub_tx(
+            mentions,
+            built.instruction.clone(),
+            built.program_account_id,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{what} send_pub_tx failed: {e:?}"))?;
     ctx.wallet_mut()
@@ -134,7 +129,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     };
     assert_eq!(reg_state.initialized, 1);
     assert_eq!(reg_state.owner, *owner.value());
-    assert_eq!(reg_state.region_count, 0);
+    assert_eq!(reg_state.region_count(), 0);
 
     // 4) Registrar A mirrors germany.
     let germany_pda = region_pda(&program_id, "germany");
@@ -247,7 +242,7 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
             .await?;
         decode_registry_state(acc.data.as_ref()).context("decoding final RegistryState")?
     };
-    assert_eq!(reg_state.region_count, 4);
+    assert_eq!(reg_state.region_count(), 4);
     assert_eq!(reg_state.registration_count, 6);
 
     Ok(())

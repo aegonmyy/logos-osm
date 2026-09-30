@@ -102,7 +102,7 @@ Accounts are PDAs derived from `(program_id, seed)`: one registry PDA
 `build.rs`:
 
 ```
-77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0
+20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f
 ```
 
 (Rebuild path: `tools/guest-builder` — needs the risc0 toolchain; CI embeds

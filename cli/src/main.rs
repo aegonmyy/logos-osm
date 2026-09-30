@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use logos_osm::regions::{Level, REGIONS};
 use logos_osm::registry::{
-    build_init, build_register_region, build_register_regions_batch, to_identities,
+    build_init, build_register_region, build_register_regions_batch,
 };
 use logos_osm::storage::{CodexStorage, MemoryStorage};
 use logos_osm::{OsmClient, UpdateStatus};
@@ -131,13 +131,17 @@ enum Cmd {
 struct TxCmd {
     /// The deployed program the tx targets.
     program_id_hex: String,
-    /// Account ids (32-byte hex each) in the order the guest asserts on.
+    /// The program's on-chain account id (the transaction target).
+    program_account_hex: String,
+    /// Account ids (32-byte hex each) in the order the guest's plan expects.
     accounts_hex: Vec<String>,
-    /// Wallet identity kinds, parallel to `accounts_hex`:
-    /// "sign" for the registrar, "read" for the rest.
-    signing: Vec<&'static str>,
-    /// risc0-serde instruction words (hex, 4 bytes each).
-    instruction_hex: Vec<String>,
+    /// The account that must sign (its signature sets `is_authorized` in the
+    /// guest's account metadata).
+    signer_hex: String,
+    /// borsh-encoded instruction (hex).
+    instruction_hex: String,
+    /// Instruction encoding marker.
+    encoding: &'static str,
 }
 
 fn hex32(bytes: [u8; 32]) -> String {
@@ -153,26 +157,16 @@ fn print_tx(
     built: &logos_osm::registry::OsmTxBuilt,
     signer: &lee_core::account::AccountId,
 ) {
-    let ids = to_identities(built, signer);
-    let signing: Vec<&'static str> = ids
-        .iter()
-        .map(|id| match id {
-            wallet::AccountIdentity::Public(_) => "sign",
-            _ => "read",
-        })
-        .collect();
     let cmd = TxCmd {
         program_id_hex: {
             let words = osm_registry::osm_registry_id();
             words.iter().map(|w| format!("{w:08x}")).collect()
         },
+        program_account_hex: account_hex(&built.program_account_id),
         accounts_hex: built.accounts.iter().map(account_hex).collect(),
-        signing,
-        instruction_hex: built
-            .instruction
-            .iter()
-            .map(|w| format!("{w:08x}"))
-            .collect(),
+        signer_hex: account_hex(signer),
+        instruction_hex: hex::encode(&built.instruction),
+        encoding: "borsh",
     };
     println!("--- {label} transaction (submit via the wallet) ---");
     println!("{}", serde_json::to_string_pretty(&cmd).unwrap());

@@ -11,7 +11,7 @@ cargo test --release -p osm-integration-tests --test cycle_profile -- --ignored 
 
 ## Measurements
 
-Program: `77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0`
+Program: `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f`
 (guest as of this document; see "changelog" below). Cycle counts are
 deterministic for a given input + guest image.
 

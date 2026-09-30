@@ -23,9 +23,9 @@
 use std::{env, fs, path::Path};
 
 /// The program id of the committed `osm_registry.bin` (big-endian words).
-/// Hex: 77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0
+/// Hex: 20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f
 const OSM_REGISTRY_ID: [u32; 8] = [
-    2012012335, 2465069982, 3041696483, 4122921503, 1186396581, 3507054203, 1177540972, 2099004400,
+    553240457, 1425277770, 641778125, 3504861381, 1085767432, 3367938039, 1596294112, 1827289119,
 ];
 
 fn main() {

@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 
 use crate::regions::{Level, Region, REGIONS};
 use crate::registry::{
-    build_init, build_register_region, build_register_regions_batch, to_identities, OsmTxBuilt,
+    build_init, build_register_region, build_register_regions_batch, OsmTxBuilt,
 };
 use crate::storage::{CodexStorage, MemoryStorage, Storage};
 use crate::OsmClient;
@@ -42,7 +42,7 @@ use crate::OsmClient;
 /// `methods/osm-host`'s `DOCUMENTED_ID_HEX`; the integration-test crate has a
 /// consistency test asserting the embedded artifact still hashes to this.
 pub const DOCUMENTED_PROGRAM_ID_HEX: &str =
-    "77ecdf2f92edfb9eb54c9ae3f5beca1f46b6f9a5d109667b462fd96c7d1c43f0";
+    "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
 
 /// Return a heap JSON string the caller must free with `logos_osm_free_string`.
 fn to_json(v: Value) -> *mut c_char {
@@ -272,34 +272,21 @@ fn account_from_hex(hex_str: &str) -> anyhow::Result<lee_core::account::AccountI
     Ok(lee_core::account::AccountId::new(arr))
 }
 
-fn hex_words(words: &[u32]) -> String {
-    let mut out = String::with_capacity(words.len() * 8);
-    for w in words {
-        out.push_str(&format!("{w:08x}"));
-    }
-    out
-}
-
-/// The wallet-submittable form of a built tx: account ids in guest order,
-/// which of them sign, and the risc0-serde instruction words.
+/// The wallet-submittable form of a built tx: the program account (target),
+/// the shard selectors in guest order, the account that must sign, and the
+/// borsh-encoded instruction.
 fn tx_json(st: &AppState, built: &OsmTxBuilt, signer: &lee_core::account::AccountId) -> Value {
-    let ids = to_identities(built, signer);
-    let signing: Vec<&str> = ids
-        .iter()
-        .map(|id| match id {
-            wallet::AccountIdentity::Public(_) => "sign",
-            _ => "read",
-        })
-        .collect();
     json!({
         "program_id_hex": st.program_id_hex,
+        "program_account_hex": hex::encode(built.program_account_id.value()),
         "accounts_hex": built
             .accounts
             .iter()
             .map(|a| hex::encode(a.value()))
             .collect::<Vec<_>>(),
-        "signing": signing,
-        "instruction_hex": hex_words(&built.instruction),
+        "signer_hex": hex::encode(signer.value()),
+        "instruction_hex": hex::encode(&built.instruction),
+        "encoding": "borsh",
     })
 }
 
@@ -905,9 +892,16 @@ mod tests {
             r["result"]["program_id_hex"].as_str().unwrap(),
             DOCUMENTED_PROGRAM_ID_HEX
         );
+        assert_eq!(r["result"]["encoding"].as_str().unwrap(), "borsh");
+        // The instruction is borsh bytes now; decode them back (the guest's
+        // exact decode path) and check they name the owner we passed.
+        let words = hex::decode(r["result"]["instruction_hex"].as_str().unwrap()).unwrap();
+        let back: crate::registry::Instruction = borsh::from_slice(&words).unwrap();
         assert_eq!(
-            r["result"]["instruction_hex"].as_str().unwrap().len() % 8,
-            0
+            back,
+            crate::registry::Instruction::Init {
+                owner: [0x07; 32]
+            }
         );
         // bad program id rejected at open.
         let r = invoke(

@@ -1,0 +1,6 @@
+# Must match the LEZ toolchain: v0.3.0 pins Rust 1.98.1, and the sequencer
+# crates the integration tests pull in use `if let` guards, which stabilize
+# after 1.94. Keeping this in sync with the LEZ tag avoids a build that works
+# for the SDK but fails once the test targets compile.
+[toolchain]
+channel = "1.98.1"
