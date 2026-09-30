@@ -175,8 +175,27 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     // 1) Deploy the committed guest artifact and keep the address it lands at.
     // v0.3 chooses the program's account at deploy time, and PDAs and the
     // transaction target both key off that account.
+    //
+    // The payer must already hold tokens. A deploy is a sequence of
+    // fee-bearing transactions (one per bytecode segment), and a freshly
+    // created account has a zero balance, so the later segments are rejected
+    // with `Incorrect fee` once the fee market charges for them. The v0.3
+    // deploy helper says as much: "a freshly-claimed account can't pay for
+    // its own claim". Check before deploying so the failure names the cause
+    // instead of surfacing as a fee error four segments in.
     let payer = new_public_account(&mut wallet, "osm-testnet-payer").await?;
     net_retry!(wallet.sync_to_latest_block(), "post-payer-sync");
+    let balance = net_retry!(wallet.get_account_public(payer), "payer-balance")
+        .data
+        .native_balance()
+        .unwrap_or(0);
+    if balance == 0 {
+        anyhow::bail!(
+            "payer {payer} holds no tokens, so it cannot pay the deploy fees. \
+             Fund it from an account that already holds tokens (see \
+             docs/TESTNET_FUNDING.md) and re-run."
+        );
+    }
     let program_account = net_retry!(
         deploy_program(&mut wallet, osm_registry::osm_registry_elf().to_vec(), payer),
         "deploy"
