@@ -41,6 +41,9 @@ methods/osm-host/   host-side embed of the committed guest ELF + program id
 tools/guest-builder the only rebuild path for the guest artifact
 module/             Logos Core module plugin (dlopens the SDK cdylib)
 app/                Basecamp QML app (registrar + consumer tabs)
+examples/           consumer-app: the minimal embedding example (SDK module
+                    only, resolves a region to its CID, hosts nothing)
+idl/                osm_registry.idl.json (SpelIdl schema)
 tests/              integration tests: live sequencer lifecycle, off-chain
                     e2e (hermetic + real Codex), CU cycle profile
 scripts/            build-ffi.sh, package-basecamp.sh, smoke_lgx.sh, demo.sh
@@ -108,17 +111,23 @@ c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79
 (Rebuild path: `tools/guest-builder` — needs the risc0 toolchain; CI embeds
 the committed artifact instead.)
 
-### Deployed on the public LEZ testnet
+### Deployed on the public LEZ testnet: not currently
 
-Program `77ecdf2f…1c43f0` is live on `https://testnet.lez.logos.co`
-(registry PDA
-`fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7`).
-The full lifecycle was exercised there by
-`tests/tests/osm_registry_testnet.rs` (`RISC0_DEV_MODE=0`): deploy → `Init` →
-`RegisterRegion(germany)` → `RegisterRegionsBatch(france, us/california)` —
-every tx included (blocks ~18830→18843) and the state read back from chain:
-**3 regions, 3 registrations**. Captured log:
-`docs/demo-evidence/osm_registry_public_testnet.log`.
+**Nothing is deployed on testnet 0.3.** The network was reset for v0.3 (the
+chain went from ~18,840 blocks back to block 1), so the registry that ran on
+the pre-0.3 testnet is gone, along with the three region entries it held.
+
+An earlier deployment was exercised end to end on the pre-0.3 testnet: deploy
+→ `Init` → `RegisterRegion(germany)` → `RegisterRegionsBatch(france,
+us/california)`, every transaction included and the state read back from
+chain (3 regions, 3 registrations). The captured log is
+`docs/demo-evidence/osm_registry_public_testnet.log`. It is kept as evidence
+that the lifecycle ran against a real network; it does not describe the
+current chain.
+
+Redeploying on 0.3 is blocked on a funded payer account, which the testnet
+does not hand out. See [docs/TESTNET_FUNDING.md](docs/TESTNET_FUNDING.md) for
+what was tried and what the deployment needs.
 
 ## Quickstart (CLI)
 
@@ -134,13 +143,24 @@ osm host germany --registrar <hex32> # download, verify MD5, store, print tx
 osm register-bulk --regions germany,france --registrar <hex32>
 osm fetch germany --cid <cid> --checksum <md5hex>
 osm update germany
+
+# read the registry straight from the chain (no wallet needed)
+osm lookup --region germany
+osm lookup --parent us
+osm lookup --cid <cid>
 ```
 
-Registration transactions are **printed as JSON** (accounts, identity kinds,
-risc0-serde instruction words) for the wallet to submit — the SDK builds, the
-wallet signs; the SDK never holds keys. The full on-chain submission is
-exercised end-to-end by `tests/tests/osm_registry_live.rs` against a
-standalone sequencer.
+Commands that build a registration transaction need
+`--program-account <base58>` (or `OSM_PROGRAM_ACCOUNT`): the address a
+deployment returned. Under the v0.3 program model a deployed program lives at
+an account the deployer chose, so PDAs and transaction targets key off that
+account rather than off the bytecode's image id.
+
+Registration transactions are **printed as JSON** (the program account, the
+shard selectors, the signing account, and borsh-encoded instruction bytes)
+for the wallet to submit — the SDK builds, the wallet signs; the SDK never
+holds keys. The full on-chain submission is exercised end-to-end by
+`tests/tests/osm_registry_live.rs` against a standalone sequencer.
 
 ### Logos Storage node (Codex)
 
