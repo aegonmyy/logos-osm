@@ -11,9 +11,9 @@
     logos-module-builder.url = "github:logos-co/logos-module-builder";
     nixpkgs.follows = "logos-module-builder/nixpkgs";
     # The SDK module this app depends on (see metadata.json "dependencies").
-    # Pinned to the branch carrying the v0.3 port; point this at the default
-    # branch (or a tag) once the port is merged.
-    logos-osm.url = "github:aegonmyy/logos-osm/lez-0.3";
+    # The default branch, which carries the v0.3 port. Pin this to a tag
+    # before any release that has to stay reproducible.
+    logos-osm.url = "github:aegonmyy/logos-osm";
     logos-osm.inputs.logos-module-builder.follows = "logos-module-builder";
   };
 

@@ -7,10 +7,11 @@
 
 ## 🤝 STATE AT HANDOFF (2026-09-30) — read this first
 
-**Where things are:** branch `lez-0.3` at the tip of `aegonmyy/logos-osm`.
-`main` is the pre-port code (v0.2.4 LEZ, v0.1 IDL, no consumer example) and
-is stale — read `lez-0.3`. The solution PR is **opened**
-(`logos-co/lambda-prize#169`, a draft).
+**Where things are:** `main`, at the tip of `aegonmyy/logos-osm`. The v0.3
+port was merged here from the `lez-0.3` branch, along with the testnet
+funding blocker from `blocked-testnet-funding`; both branches are now
+redundant. The solution PR is **opened** (`logos-co/lambda-prize#169`, a
+draft).
 
 **The registry is ported to the LEZ v0.3 program model.** v0.3 replaced the
 post-state API with `plan`/`apply`: a program emits one effect per shard it
@@ -74,10 +75,10 @@ and install Rust 1.98.1; before that they targeted the self-hosted box that
 died with the VPS, and the hosted-runner guard read an env var GitHub does
 not set.
 
-**If you are a successor agent:** commit and push to `lez-0.3`. Do not
-merge `main` until the deployment and adoption criteria are real. Verify
-before claiming: the README previously asserted a live testnet deployment
-that the v0.3 chain reset had already erased.
+**If you are a successor agent:** commit and push to `main`. Verify before
+claiming: the README previously asserted a live testnet deployment that the
+v0.3 chain reset had already erased, and the submission claimed macOS met on
+the strength of a build.
 
 ---
 
