@@ -46,6 +46,7 @@ Item {
             id: tabs
             Layout.fillWidth: true
             TabButton { text: "Host / Registrar" }
+            TabButton { text: "Regions" }
             TabButton { text: "Consumer" }
         }
 
@@ -171,6 +172,117 @@ Item {
                         font.family: "Monospace"
                         wrapMode: TextArea.Wrap
                     }
+                }
+            }
+
+            // ============ REGIONS ============
+            // The closed set, with each region's on-chain status. The set is
+            // static (the prize froze it), so the list renders without a
+            // network call; the per-region status is read when a row is
+            // clicked, because a status costs one chain read.
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        text: "Regions (" + regionModel.count + " in the set)"
+                        font.bold: true
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: "Load set"
+                        onClicked: {
+                            const r = root.call("regions")
+                            regionModel.clear()
+                            if (r.ok && r.result && r.result.regions) {
+                                for (const g of r.result.regions) {
+                                    regionModel.append({
+                                        path: g.path,
+                                        name: g.name,
+                                        level: g.level,
+                                        status: "unknown",
+                                        detail: ""
+                                    })
+                                }
+                            } else {
+                                outR.text = root.pretty(r)
+                            }
+                        }
+                    }
+                }
+
+                Label {
+                    text: "Click a region to read its registry entry from the chain."
+                    color: "#666"
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+
+                ListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: ListModel { id: regionModel }
+                    delegate: Rectangle {
+                        width: ListView.view.width
+                        height: 34
+                        color: index % 2 === 0 ? "transparent" : "#00000008"
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 6
+                            anchors.rightMargin: 6
+                            spacing: 8
+                            Label {
+                                text: model.status === "hosted" ? "●"
+                                      : (model.status === "not-hosted" ? "○" : "·")
+                                color: model.status === "hosted" ? "#2e7d32" : "#9e9e9e"
+                                Layout.preferredWidth: 14
+                            }
+                            Label {
+                                text: model.path
+                                Layout.preferredWidth: 200
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                text: model.status === "hosted"
+                                      ? ("v" + model.detail)
+                                      : (model.status === "not-hosted" ? "not hosted" : "")
+                                color: "#555"
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                const r = root.call("lookup", { region: model.path })
+                                if (r.ok && r.result) {
+                                    const latest = r.result.latest
+                                    regionModel.setProperty(index, "status", "hosted")
+                                    regionModel.setProperty(index, "detail",
+                                        latest ? String(latest.version) : "?")
+                                    outR.text = root.pretty(r)
+                                } else {
+                                    regionModel.setProperty(index, "status", "not-hosted")
+                                    regionModel.setProperty(index, "detail", "")
+                                    outR.text = r.error || "not registered"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Label { text: "Result"; font.bold: true }
+                TextArea {
+                    id: outR
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 120
+                    readOnly: true
+                    font.family: "Monospace"
+                    wrapMode: TextArea.Wrap
                 }
             }
 

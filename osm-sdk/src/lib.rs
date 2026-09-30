@@ -12,7 +12,22 @@
 //! 4. **Consume**: download from Logos Storage (Geofabrik fallback),
 //!    re-verify the MD5, import locally, and check for updates.
 //!
-//! Layout (filled in as the build proceeds):
+//! ## Two entry points
+//!
+//! Most integrations want only one of these:
+//!
+//! - **Consuming** — [`registry::resolve_region`] turns a region into the CID
+//!   and metadata the registry records for it on-chain, and
+//!   [`registry::all_regions`] / [`registry::children_of`] enumerate the set.
+//!   This path needs no wallet, no storage node, and no registration, which
+//!   is what lets a viewer or a small Basecamp module embed the SDK without
+//!   taking on an operator's burden. Worked example: `README.md`.
+//! - **Hosting** — [`OsmClient`] downloads from Geofabrik, verifies the
+//!   published MD5, stores to Logos Storage, and
+//!   [`registry::build_register_region`] builds the registration for a wallet
+//!   to submit. This is the distribution app's path.
+//!
+//! Layout:
 //! - [`regions`] — the frozen region set + Geofabrik URL layout;
 //! - `geofabrik` — index fetch/parse, `.md5` fetch/parse (hash + version),
 //!   streaming PBF download;

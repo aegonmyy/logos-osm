@@ -171,6 +171,54 @@ pub fn build_register_regions_batch(
     }
 }
 
+/// Resolve a region to the entry the registry records for it on-chain.
+///
+/// This is the consumer path: a Basecamp module that wants map data needs to
+/// turn a region into the CID of the bytes an evaluator (or any reader) can
+/// fetch and re-verify. Returns `Ok(None)` when the region holds no
+/// registration yet, which is an ordinary answer rather than an error.
+///
+/// Reads the sequencer's `getAccount` directly, so it needs no wallet and no
+/// local storage node.
+///
+/// ```no_run
+/// # async fn demo() -> anyhow::Result<()> {
+/// use logos_osm::registry::{resolve_region, RegionEntry};
+/// # let program_account = lee_core::account::AccountId::new([0u8; 32]);
+/// let entry: Option<RegionEntry> =
+///     resolve_region("https://testnet.lez.logos.co", &program_account, "germany").await?;
+/// if let Some(e) = entry {
+///     if let Some(latest) = e.latest_mirror() {
+///         println!("germany is at {} (v{})", latest.cid, latest.version);
+///     }
+/// }
+/// # Ok(()) }
+/// ```
+pub async fn resolve_region(
+    sequencer_url: &str,
+    program_account: &AccountId,
+    region_path: &str,
+) -> anyhow::Result<Option<RegionEntry>> {
+    use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
+
+    let client = SequencerClientBuilder::default()
+        .build(sequencer_url.to_string())
+        .map_err(|e| anyhow::anyhow!("sequencer {sequencer_url}: {e}"))?;
+    let pda = region_pda(program_account, region_path);
+    let account = client
+        .get_account(pda)
+        .await
+        .map_err(|e| anyhow::anyhow!("reading {region_path} from the sequencer: {e}"))?;
+
+    let shard = account.data.shard(*program_account);
+    if shard.as_ref().is_empty() {
+        return Ok(None);
+    }
+    let entry: RegionEntry = borsh::from_slice(shard.as_ref())
+        .map_err(|e| anyhow::anyhow!("decoding {region_path}: {e}"))?;
+    Ok(Some(entry))
+}
+
 /// Decode a registry account's data bytes.
 pub fn decode_registry_state(bytes: &[u8]) -> anyhow::Result<RegistryState> {
     borsh::from_slice(bytes).map_err(|e| anyhow::anyhow!("decoding RegistryState: {e}"))

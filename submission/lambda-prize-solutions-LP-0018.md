@@ -135,7 +135,12 @@ as much as trust in that operator.
 - [x] SDK with published API documentation and a minimal embedding example.
 - [x] CLI covering host, batch-register, lookup by region/parent/CID, update
   check, download, and local import.
-- [x] Clear UX: hosted versus not-hosted, version numbers, verification results.
+- [x] Clear UX: the app has a **Regions** tab that lists the closed set and
+  shows each region's on-chain status (hosted, with its version, or not
+  hosted), and both workflows surface their verification result: the host
+  flow prints the computed MD5 next to Geofabrik's published one, and the
+  fetch flow re-verifies on import. The regions tab reads status on demand
+  rather than prefetching 72 chain reads.
 
 ### Reliability
 

@@ -216,6 +216,10 @@
           "type": "string"
         },
         {
+          "name": "source_url",
+          "type": "string"
+        },
+        {
           "name": "checksum",
           "type": {
             "array": [
@@ -248,6 +252,10 @@
         },
         {
           "name": "cid",
+          "type": "string"
+        },
+        {
+          "name": "source_url",
           "type": "string"
         },
         {

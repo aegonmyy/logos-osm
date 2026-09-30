@@ -178,13 +178,33 @@ docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
 
 `module/` is a Logos Core module plugin (universal interface) that dlopens
 `liblogos_osm.so` (`scripts/build-ffi.sh`) and forwards ops over the FFI C ABI
-(`logos_osm_invoke`). `app/` is the QML app — a **Registrar** tab
-(open/discover/regions/host/host-bulk/register/register-bulk/init) and a
-**Consumer** tab (fetch/import/update/catalog) — talking to the module over
-LogosAPIClient.
+(`logos_osm_invoke`). `app/` is the QML app, with three tabs: **Host /
+Registrar** (open/discover/regions/host/host-bulk/register/register-bulk/
+init), **Regions** (the closed set with each region's on-chain status via
+`lookup`), and **Consumer** (fetch/import/update/catalog). It talks to the
+module over LogosAPIClient.
+
+`examples/consumer-app/` is the minimal embedding example: a module that
+depends on `osm` and does nothing but enumerate the set and resolve a region
+to its CID.
+
+### Install from the catalog
+
+Both modules are published, so Basecamp can install them without a local
+build. Add this catalog to the module repo list:
+
+```
+https://github.com/aegonmyy/logos-modules-release-base/raw/main/logos-repo.json
+```
+
+It serves `osm` (the SDK core module) and `osm_app` (the app) for
+darwin-arm64, linux-amd64, linux-arm64 and windows-x86_64.
+
+### Build locally
 
 ```sh
-nix build .#osm-lgx .#osm-app-lgx   # .lgx bundles
+nix build .#osm-lgx .#osm-app-lgx   # .lgx bundles (root flake)
+nix build ./app#lgx-portable        # the app alone (app/flake.nix)
 ./scripts/build-ffi.sh              # liblogos_osm.so for the module
 ./scripts/smoke_lgx.sh              # full-chain smoke (plugin + Rust core)
 ```

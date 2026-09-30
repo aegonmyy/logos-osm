@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
 description = "Reusable OSM registry SDK: Geofabrik discovery, Logos Storage hosting, MD5 verification, and the LEZ registry client."
 
 [lib]
