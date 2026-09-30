@@ -58,7 +58,7 @@ mod tests {
     /// The program id documented in README.md / docs/CU_COSTS.md / STATE.md
     /// and asserted by the public-testnet lifecycle test.
     const DOCUMENTED_ID_HEX: &str =
-        "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
+        "c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79";
 
     #[test]
     fn program_id_is_stable_and_documented() {

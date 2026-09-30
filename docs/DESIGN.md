@@ -131,7 +131,7 @@ therefore commits the built artifact (`methods/osm-host/osm_registry.bin`,
 471,820 bytes) and pins the program id in `build.rs`:
 
 ```
-20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f
+c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79
 ```
 
 CI embeds the committed artifact — no risc0 toolchain needed for the unit

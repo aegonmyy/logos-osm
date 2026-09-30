@@ -36,7 +36,7 @@ use wallet::WalletCore;
 /// The documented deterministic program id (README / docs). The testnet
 /// deployment must reproduce it — same committed ELF, same PDA derivation.
 const EXPECTED_PROGRAM_ID_HEX: &str =
-    "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
+    "c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79";
 
 fn testnet_url() -> String {
     std::env::var("OSM_TESTNET_URL").unwrap_or_else(|_| "https://testnet.lez.logos.co".to_owned())

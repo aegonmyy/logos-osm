@@ -47,7 +47,7 @@ use crate::OsmClient;
 /// and transactions key off that account id (`program_account_hex`), not off
 /// this value.
 pub const DOCUMENTED_IMAGE_ID_HEX: &str =
-    "20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f";
+    "c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79";
 
 /// Return a heap JSON string the caller must free with `logos_osm_free_string`.
 fn to_json(v: Value) -> *mut c_char {

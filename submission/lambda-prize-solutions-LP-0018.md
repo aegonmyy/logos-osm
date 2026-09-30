@@ -262,7 +262,7 @@ By submitting this solution, I confirm that I have read and agree to the
    API). Merge to `main` only once the suite is green.
 2. **Deploy on testnet 0.3** and record the deployed program id, deploy
    transaction, and deployment block. The current pin
-   `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f` is the
+   `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79` is the
    guest artifact built locally and is not yet deployed.
 3. **Host 25+ regions across 15+ countries** and confirm each verifies against
    Geofabrik. This is the bulk of the remaining work and needs a Logos Storage

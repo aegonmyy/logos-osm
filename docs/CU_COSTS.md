@@ -11,29 +11,34 @@ cargo test --release -p osm-integration-tests --test cycle_profile -- --ignored 
 
 ## Measurements
 
-Program: `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f`
+Program: `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79`
 (guest as of this document; see "changelog" below). Cycle counts are
 deterministic for a given input + guest image.
 
-| instruction | user cycles | total cycles | accounts |
-|---|---|---|---|
-| `Init` | 96,142 | 262,144 | 2 |
-| `RegisterRegion` (fresh region) | 161,127 | 262,144 | 3 |
-| `RegisterRegion` (append, 2 mirrors) | 222,820 | 524,288 | 3 |
-| `RegisterRegionsBatch` ×10 | 766,758 | 1,048,576 | 12 |
-| `RegisterRegionsBatch` ×24 (cap) | 1,704,499 | 2,097,152 | 26 |
+Under the v0.3 program model one instruction costs **two** guest
+invocations: a `Plan` call that sees the instruction and the account
+metadata, and one `Apply` call per shard the plan writes. Both are reported
+per instruction, then summed.
 
-(total = user + system/overhead cycles as reported by the executor.)
+| instruction | plan user/total | apply user/total | total cycles | accounts |
+|---|---|---|---|---|
+| `Init` | 12,746 / 65,536 | 8,191 / 65,536 | 131,072 | 2 |
+| `RegisterRegion` (fresh region) | 23,029 / 131,072 | 22,161 / 131,072 | 262,144 | 3 |
+| `RegisterRegion` (append, 2 mirrors) | 23,029 / 131,072 | 29,470 / 131,072 | 262,144 | 3 |
+| `RegisterRegionsBatch` ×10 | 129,711 / 262,144 | 145,629 / 720,896 | 983,040 | 12 |
+| `RegisterRegionsBatch` ×24 (cap) | 293,203 / 524,288 | 343,585 / 1,703,936 | 2,228,224 | 26 |
+
+(total = user + system/overhead cycles as reported by the executor, summed
+over the plan and every apply the instruction emits.)
 
 ## Single vs batch — the amortization
 
 - **Single region** (one `RegisterRegion`): **262,144 total cycles**/region.
-- **Batch of 24** (one `RegisterRegionsBatch`, the cap): **2,097,152 total
-  cycles** ÷ 24 = **≈87,381 total cycles/region** — a **3.0×** reduction
+- **Batch of 24** (one `RegisterRegionsBatch`, the cap): **2,228,224 total
+  cycles** ÷ 24 = **≈92,843 total cycles/region** — a **2.8×** reduction
   versus scalar registration, because the fixed per-transaction cost
-  (instruction decode, registry read+write, signer handling) is paid once
-  instead of per region. User-cycle amortization is similar:
-  161,127 → ≈71,021/region.
+  (instruction decode, registry read+write, signer handling, and the plan
+  call itself) is paid once instead of per region.
 
 The batch instruction is the right shape for bulk hosting (the prize's bulk
 workflow): hosting 24 regions costs about the same total compute as ~8
@@ -50,9 +55,13 @@ bounded by the 32-mirror cap.
   the budget ultimately prices.
 - `MAX_BATCH = 24` keeps the batch instruction inside one transaction's
   instruction-size and account-count limits (2 + N accounts; N=24 → 26).
-- The cycle profile also runs as a CI job on every push, so a guest change
-  that shifts CU costs visibly is caught in the diff of this document's
-  regeneration command, not in production.
+- The cycle profile runs as a CI job (manual trigger), so a guest change that
+  shifts CU costs is caught by re-running it rather than in production.
+- The v0.3 numbers are roughly double the v0.2 ones for the same work, which
+  is the plan/apply split showing up directly: every instruction now pays for
+  two guest invocations instead of one. The batch instruction amortises that
+  fixed cost across regions, so bulk hosting still costs far less per region
+  than registering one at a time.
 
 ## Changelog
 
@@ -62,3 +71,9 @@ bounded by the 32-mirror cap.
   STATE.md postmortem) → program id `77ecdf2f…c1c43f0`; table above
   re-measured on the committed artifact (all counts within 0.3% of the
   pre-fix guest — the fix's claim check is noise-level in cycles).
+- 2026-09-30: ported to the LEZ v0.3 program model and re-measured. The
+  program now runs `plan` plus one `apply` per emitted effect, so the table
+  reports both; the registrar-claim pattern is gone with the old post-state
+  model. Guest rebuilt → image id
+  `c272ec3c…a98e79`. The per-region amortisation survives the change
+  (92,843 total cycles/region at the batch cap).

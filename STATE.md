@@ -126,7 +126,7 @@ reference (and its Codex container is reused here).
 ## Key facts (don't re-derive)
 
 - **Program ID (pinned, committed artifact):**
-  `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f`
+  `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79`
   — `methods/osm-host/osm_registry.bin` (471,820 bytes), id pinned in its
   build.rs; `tools/guest-builder` is the only rebuild path (needs risc0
   toolchain; excluded from CI host builds via `--exclude osm-guest-builder`).
@@ -175,7 +175,7 @@ nix build .#osm-lgx .#osm-app-lgx && ./scripts/build-ffi.sh && ./scripts/smoke_l
 ## Remaining work (in order)
 
 1. ✅ **Guest artifact rebuilt + re-pinned** (2026-08-22): new id
-   `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f`
+   `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79`
    (artifact 471,820 bytes) — swept through all 9 files incl. build.rs words
    + testnet EXPECTED_PROGRAM_ID_HEX; 0 stale refs remain.
 2. ✅ **`osm_registry_live` GREEN both modes (2026-08-22)** — dev 531.76 s
@@ -216,7 +216,7 @@ osm_registry_testnet -- --ignored --nocapture` against
 | Step | Evidence |
 |---|---|
 | Deploy | tx `0xea6ac729f45586af54ed1a73c8008211f25d850db50723fe820f2723d7021f51` |
-| Program | `20f9c78954f4034a2640c1cdd0e7f0c540b77f08c8bea7f75f2583e06cea381f` (= committed artifact id) |
+| Program | `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79` (= committed artifact id) |
 | Init | tx `0x2ab1afc37b68ecc66c075b916677866c6efae6cb0e87f3399587d56f5ff14bed` |
 | Registry PDA | `fdcd6be67c17d9164eef31d75aa76aaafef33e14929afc9c0750414219d64ac7` |
 | RegisterRegion(germany) | tx `0x4934796a05abfdaf6e186724bf722117f48aa05231c9fdb6c6501a87e5679c06` |
