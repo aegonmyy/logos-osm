@@ -48,7 +48,8 @@ tests/              integration tests: live sequencer lifecycle, off-chain
                     e2e (hermetic + real Codex), CU cycle profile
 scripts/            build-ffi.sh, package-basecamp.sh, smoke_lgx.sh, demo.sh
 docs/               DESIGN.md, CU_COSTS.md, PERFORMANCE.md, demo evidence
-submission/LP-0018.md
+submission/lambda-prize-solutions-LP-0018.md  (the filing copy)
+submission/LP-0018.md                (earlier draft, superseded)
 ```
 
 ## The region set
