@@ -53,6 +53,47 @@ There is no faucet to call. The usual routes were checked and do not apply:
 The first funded account on a testnet comes from genesis, and its keys are
 held by whoever ran the network.
 
+## Confirmed in the LEZ source, not inferred
+
+Three independent places agree that this is a funding requirement.
+
+**The sequencer screens the fee against the payer's balance**, before the
+mempool sees the transaction (`lez/sequencer/actors/executor/src/actor.rs`):
+
+```rust
+self.sequencer
+    .with_state(|state| sequencer_core::fees::screen(&transaction, state))
+    .await
+    .map_err(|err| Error::IncorrectFee(err.into()))?;
+```
+
+and `screen` itself (`lez/sequencer/core/src/fees.rs`) ends with:
+
+```rust
+let balance = state.get_account_by_id(payer).data.native_balance()...;
+if balance < fee_reserve {
+    return Err(Error::PayerCannotFund { payer, balance, fee_reserve });
+}
+```
+
+**The error we saw is that error.** `Incorrect fee` is the message the
+executor attaches to a failed `screen`, and the wallet-FFI maps it straight
+to a funding failure (`lez/wallet-ffi/src/lib.rs`):
+
+```rust
+ExecutionFailureKind::SequencerClientError(..)
+    if error.message().contains("Incorrect fee") => FfiError::PayerCannotFund,
+```
+
+So "Incorrect fee" is this codebase's own name for "the payer cannot fund
+this".
+
+**The requirement is new in v0.3.** v0.3.0 ships a fee module
+(`lee/state_machine/src/fees.rs`, `lez/programs/fee`) and the screening above;
+v0.2.4's tree contains no fee-named file at all. That is consistent with the
+August deployment succeeding from a freshly created account on the pre-0.3
+testnet, which is the thing that made this look like it should work.
+
 ## What is needed
 
 One of:
@@ -60,7 +101,20 @@ One of:
 1. **A genesis-funded testnet account.** The LEZ/Logos team holds these.
    Asking in the builder channel for a funded account on testnet 0.3 is the
    direct route, and it is the same account that would later register the 25
-   regions, so it is worth asking once rather than per-task.
+   regions, so it is worth asking once rather than per-task. Because the
+   screen above is new in v0.3, every builder deploying on 0.3 meets it, so
+   it is a question the team will already be expecting rather than a sign of
+   having missed something.
+
+   A form of words that asks the whole question:
+
+   > On testnet 0.3 a freshly created account fails the fee screen
+   > (`PayerCannotFund`: `balance < fee_reserve` in `sequencer_core::fees::
+   > screen`), and I read a zero balance back from `getAccountBalance`.
+   > Before v0.3 a fresh account could transact, so this is new. What is the
+   > intended way to get native tokens on the public 0.3 testnet for
+   > deployment and program testing — is there a faucet, or should I ask for
+   > a funded account?
 2. **A documented funding mechanism** for testnet 0.3 that the docs above
    do not mention. If one exists, this document should be replaced by it.
 
@@ -76,8 +130,9 @@ One of:
 
 ## Note on the earlier deployment
 
-A registry was deployed on the pre-0.3 testnet in August 2026, and that run
-created its accounts the same way. Either that testnet funded new accounts,
-or the deployment used an account provisioned outside the test. Either way,
-the behaviour of testnet 0.3 as observed above is that new accounts start
-empty.
+A registry was deployed on the pre-0.3 testnet in August 2026 from a freshly
+created account, with no funding step anywhere in the run (the captured log
+is `docs/demo-evidence/osm_registry_public_testnet.log`). Given that v0.2.4
+has no fee module and v0.3 does, the most likely reading is that the balance
+screen is what changed: the earlier testnet admitted the transaction, and 0.3
+does not.
