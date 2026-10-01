@@ -21,7 +21,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use lee::ProgramId;
 use lee_core::account::AccountId;
-use osm_integration_tests::deploy_program;
+use osm_integration_tests::{GENESIS_FUND_AMOUNT, deploy_program, fund_account_from_genesis};
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
     decode_registry_state, region_pda, registry_pda, RegionRegistration,
@@ -181,21 +181,17 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     // created account has a zero balance, so the later segments are rejected
     // with `Incorrect fee` once the fee market charges for them. The v0.3
     // deploy helper says as much: "a freshly-claimed account can't pay for
-    // its own claim". Check before deploying so the failure names the cause
-    // instead of surfacing as a fee error four segments in.
+    // its own claim".
     let payer = new_public_account(&mut wallet, "osm-testnet-payer").await?;
     net_retry!(wallet.sync_to_latest_block(), "post-payer-sync");
-    let balance = net_retry!(wallet.get_account_public(payer), "payer-balance")
-        .data
-        .native_balance()
-        .unwrap_or(0);
-    if balance == 0 {
-        anyhow::bail!(
-            "payer {payer} holds no tokens, so it cannot pay the deploy fees. \
-             Fund it from an account that already holds tokens (see \
-             docs/TESTNET_FUNDING.md) and re-run."
-        );
-    }
+    // The payer has to hold tokens before the first fee-bearing transaction.
+    // A freshly claimed account holds none, and the public testnet has no
+    // faucet, so fund it from the published genesis account. See
+    // docs/TESTNET_FUNDING.md for how that was established.
+    fund_account_from_genesis(&mut wallet, &testnet_url(), payer, GENESIS_FUND_AMOUNT)
+        .await
+        .context("funding the deploy payer from the genesis account")?;
+    net_retry!(wallet.sync_to_latest_block(), "post-funding-sync");
     let program_account = net_retry!(
         deploy_program(&mut wallet, osm_registry::osm_registry_elf().to_vec(), payer),
         "deploy"
@@ -203,10 +199,19 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
     println!("deployed program at account {program_account}");
 
-    // 2) Owner + one registrar.
+    // 2) Owner + one registrar. Each of them sends transactions (Init,
+    //    RegisterRegion), and under v0.3 the signer pays its own fee when no
+    //    explicit payer is given, so both need a balance too.
     let owner = new_public_account(&mut wallet, "osm-testnet-owner").await?;
     let registrar = new_public_account(&mut wallet, "osm-testnet-registrar").await?;
     net_retry!(wallet.sync_to_latest_block(), "post-accounts-sync");
+    fund_account_from_genesis(&mut wallet, &testnet_url(), owner, GENESIS_FUND_AMOUNT)
+        .await
+        .context("funding the owner")?;
+    fund_account_from_genesis(&mut wallet, &testnet_url(), registrar, GENESIS_FUND_AMOUNT)
+        .await
+        .context("funding the registrar")?;
+    net_retry!(wallet.sync_to_latest_block(), "post-funding-accounts-sync");
 
     // 3) Init.
     send_and_await(
