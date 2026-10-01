@@ -1,0 +1,42 @@
+name: Fetch Geofabrik PBF
+
+# Pulls a region's PBF + its published MD5 from Geofabrik and uploads them as
+# an artifact. Run on a hosted runner (fresh IP) because download.geofabrik.de
+# throttles some codespace egress for large file downloads; the artifact is
+# fetched back to the working machine over the GitHub API. Manual trigger only.
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Geofabrik path, e.g. europe/belgium"
+        required: true
+        default: "europe/belgium"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download PBF + MD5
+        run: |
+          set -e
+          base="https://download.geofabrik.de/${{ inputs.region }}"
+          curl -fL --retry 5 --retry-delay 10 -o region-latest.osm.pbf "${base}-latest.osm.pbf"
+          curl -fL --retry 5 --retry-delay 10 -o region-latest.osm.pbf.md5 "${base}-latest.osm.pbf.md5"
+          echo "published checksum:"; cat region-latest.osm.pbf.md5
+          echo "computed checksum:"; md5sum region-latest.osm.pbf
+          # Verify the downloaded bytes match Geofabrik's published MD5.
+          got=$(md5sum region-latest.osm.pbf | awk '{print $1}')
+          exp=$(awk '{print $1}' region-latest.osm.pbf.md5)
+          [ "$got" = "$exp" ] || { echo "MD5 mismatch: got $got, expected $exp"; exit 1; }
+          echo "verified: $got"
+          echo "$got" > checksum.txt
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geofabrik-pbf
+          retention-days: 3
+          path: |
+            region-latest.osm.pbf
+            region-latest.osm.pbf.md5
+            checksum.txt
