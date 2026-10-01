@@ -22,6 +22,9 @@ wallet.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 program_loader_core.workspace = true
+testnet_initial_state.workspace = true
+common.workspace = true
+sequencer_service_rpc.workspace = true
 
 [dev-dependencies]
 # Live harness: spins up bedrock + sequencer + indexer + wallet. Heavy build.
