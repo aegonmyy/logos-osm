@@ -74,7 +74,12 @@ async fn main() -> Result<()> {
     };
     println!("our account: {target}");
 
-    let before = wallet.get_account_public(target).await?.data.native_balance().unwrap_or(0);
+    let before = wallet
+        .get_account_public(target)
+        .await?
+        .data
+        .native_balance()
+        .unwrap_or(0);
     println!("balance before: {before}");
     if before > 0 {
         println!("already funded; nothing to do");
@@ -90,9 +95,16 @@ async fn main() -> Result<()> {
         .into_iter()
         .find(|a| a.account_id == source.account_id)
         .context("genesis account has no declared balance")?;
-    println!("genesis account: {} ({})", source.account_id, funded.balance);
+    println!(
+        "genesis account: {} ({})",
+        source.account_id, funded.balance
+    );
     if funded.balance < FUND_AMOUNT {
-        bail!("genesis balance {} is below the {} we want to move", funded.balance, FUND_AMOUNT);
+        bail!(
+            "genesis balance {} is below the {} we want to move",
+            funded.balance,
+            FUND_AMOUNT
+        );
     }
 
     // 3. Build and sign the transfer with the genesis key, then submit it.
@@ -105,7 +117,9 @@ async fn main() -> Result<()> {
         native_token::NATIVE_TOKEN_PROGRAM_ID,
         shard_selectors,
         vec![nonce],
-        native_token::Instruction::Transfer { amount: FUND_AMOUNT },
+        native_token::Instruction::Transfer {
+            amount: FUND_AMOUNT,
+        },
         FeeDeclaration::new(source.account_id, 2_000_000, 0, u128::MAX >> 1),
     )
     .context("building the transfer")?;
@@ -126,7 +140,12 @@ async fn main() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let after = wallet.get_account_public(target).await?.data.native_balance().unwrap_or(0);
+    let after = wallet
+        .get_account_public(target)
+        .await?
+        .data
+        .native_balance()
+        .unwrap_or(0);
     println!("balance after: {after}");
     if after <= before {
         bail!("the transfer did not land: still {after}");

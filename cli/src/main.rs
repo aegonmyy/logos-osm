@@ -20,11 +20,11 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use logos_osm::regions::{Level, REGIONS};
 use logos_osm::registry::{
-    RegionEntry, build_init, build_register_region, build_register_regions_batch, region_pda,
+    build_init, build_register_region, build_register_regions_batch, region_pda, RegionEntry,
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use logos_osm::storage::{CodexStorage, MemoryStorage};
 use logos_osm::{OsmClient, UpdateStatus};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -236,7 +236,11 @@ fn print_entry(path: &str, entry: &RegionEntry) {
     println!(
         "{}\t{}\tlevel={}\tmirrors={}\tregistrars={}",
         entry.region,
-        if entry.parent.is_empty() { "-" } else { &entry.parent },
+        if entry.parent.is_empty() {
+            "-"
+        } else {
+            &entry.parent
+        },
         entry.level,
         entry.mirrors.len(),
         entry.registrars().len()
@@ -355,8 +359,11 @@ async fn main() -> Result<()> {
                 println!("storage cid: {}", snap.cid);
                 if let Some(reg) = registrar {
                     let registrar = parse_account(&reg)?;
-                    let built =
-                        build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
+                    let built = build_register_region(
+                        &program_account(program_account_arg.as_deref())?,
+                        &registrar,
+                        &snap.registration(None),
+                    );
                     print_tx("RegisterRegion", &built, &registrar);
                 } else {
                     println!("(pass --registrar <hex> to also print the registration tx)");
@@ -421,8 +428,11 @@ async fn main() -> Result<()> {
                     bytes: 0,
                     path: rec.path,
                 };
-                let built =
-                    build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
+                let built = build_register_region(
+                    &program_account(program_account_arg.as_deref())?,
+                    &registrar,
+                    &snap.registration(None),
+                );
                 print_tx("RegisterRegion", &built, &registrar);
                 Ok(())
             })?;
@@ -452,7 +462,11 @@ async fn main() -> Result<()> {
                     };
                     regs.push(snap.registration(None));
                 }
-                let built = build_register_regions_batch(&program_account(program_account_arg.as_deref())?, &registrar, &regs);
+                let built = build_register_regions_batch(
+                    &program_account(program_account_arg.as_deref())?,
+                    &registrar,
+                    &regs,
+                );
                 print_tx("RegisterRegionsBatch", &built, &registrar);
                 Ok(())
             })?;
@@ -499,8 +513,11 @@ async fn main() -> Result<()> {
                         snap.region, snap.bytes
                     );
                     println!("storage cid: {}", snap.cid);
-                    let built =
-                        build_register_region(&program_account(program_account_arg.as_deref())?, &registrar, &snap.registration(None));
+                    let built = build_register_region(
+                        &program_account(program_account_arg.as_deref())?,
+                        &registrar,
+                        &snap.registration(None),
+                    );
                     print_tx("RegisterRegion", &built, &registrar);
                 } else {
                     let summary = client.import_local(&region, &pbf).await?;

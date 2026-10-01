@@ -18,7 +18,7 @@
 //! Run:
 //!   cargo test -p osm-integration-tests --test cycle_profile -- --nocapture
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use lee::program::Program;
 use lee_core::account::{AccountId, ShardData};
 use lee_core::from_frame;
@@ -28,7 +28,7 @@ use lee_core::program::{
 use risc0_zkvm::{ExecutorEnv, ExecutorImpl};
 
 use osm_core::{
-    Instruction, MAX_BATCH, Mirror, RegionEntry, RegionRegistration, RegistryState, region_seed,
+    region_seed, Instruction, Mirror, RegionEntry, RegionRegistration, RegistryState, MAX_BATCH,
 };
 
 /// The embedded program id (the exact binary the chain runs).
@@ -69,17 +69,11 @@ fn fixture(account: AccountMeta, data: ShardData) -> (AccountMeta, ShardData) {
 }
 
 fn registry_fixture(state: &RegistryState) -> (AccountMeta, ShardData) {
-    (
-        meta(registry_pda()),
-        ShardData::from(state),
-    )
+    (meta(registry_pda()), ShardData::from(state))
 }
 
 fn region_fixture(path: &str, entry: &RegionEntry) -> (AccountMeta, ShardData) {
-    (
-        meta(region_account(path)),
-        ShardData::from(entry),
-    )
+    (meta(region_account(path)), ShardData::from(entry))
 }
 
 fn empty_region_fixture(path: &str) -> (AccountMeta, ShardData) {
@@ -196,7 +190,11 @@ fn report(label: &str, plan: Measured, apply: Measured) {
     let total = plan.add(apply);
     println!(
         "{label:<34}: plan {:>9}u/{:>9}t  apply {:>9}u/{:>9}t  total {:>10} cycles",
-        plan.user_cycles, plan.total_cycles, apply.user_cycles, apply.total_cycles, total.total_cycles
+        plan.user_cycles,
+        plan.total_cycles,
+        apply.user_cycles,
+        apply.total_cycles,
+        total.total_cycles
     );
 }
 

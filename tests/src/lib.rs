@@ -11,7 +11,7 @@ use lee_core::account::ProgramShardSelector;
 use lee_core::native_token;
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
-use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
+use wallet::{program_facades::program_loader::ProgramLoader, WalletCore};
 
 /// Deploy `bytecode` through the program loader, returning the **account id**
 /// the deployed program lives at.
@@ -30,9 +30,10 @@ pub async fn deploy_program(
 ) -> Result<AccountId> {
     let segment_count = bytecode.len().div_ceil(MAX_SEGMENT_DATA_LEN);
     let header = wallet_core.create_new_account_public(None).0;
-    let segments: Vec<AccountId> = std::iter::repeat_with(|| wallet_core.create_new_account_public(None).0)
-        .take(segment_count)
-        .collect();
+    let segments: Vec<AccountId> =
+        std::iter::repeat_with(|| wallet_core.create_new_account_public(None).0)
+            .take(segment_count)
+            .collect();
     wallet_core.store_persistent_data()?;
 
     ProgramLoader(wallet_core)
@@ -103,7 +104,10 @@ pub async fn fund_account_from_genesis(
         .into_iter()
         .next()
         .context("the genesis state declares no funded account")?;
-    let nonce = net_retry!(wallet.get_accounts_nonces(&[source.account_id]), "fund-nonce")[0];
+    let nonce = net_retry!(
+        wallet.get_accounts_nonces(&[source.account_id]),
+        "fund-nonce"
+    )[0];
 
     let shard_selectors = vec![
         ProgramShardSelector::native_balance(source.account_id),

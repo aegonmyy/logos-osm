@@ -254,11 +254,9 @@ where
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Transaction JSON (for the wallet to submit — mirrors the CLI's TxCmd)
 // ---------------------------------------------------------------------------
-
 
 fn account_from_hex(hex_str: &str) -> anyhow::Result<lee_core::account::AccountId> {
     let bytes = hex::decode(hex_str.trim()).map_err(|e| anyhow::anyhow!("account hex: {e}"))?;
@@ -470,7 +468,9 @@ fn op_open(args: &Value) -> *mut c_char {
     let sid = str_arg(args, "session").unwrap_or_else(|| "default".to_string());
     {
         let mut guard = SESSIONS.lock().unwrap();
-        guard.get_or_insert_with(HashMap::new).insert(sid.clone(), st);
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(sid.clone(), st);
     }
     *ACTIVE_SESSION.lock().unwrap() = sid;
     ok(summary)
@@ -981,9 +981,7 @@ mod tests {
         let back: crate::registry::Instruction = borsh::from_slice(&words).unwrap();
         assert_eq!(
             back,
-            crate::registry::Instruction::Init {
-                owner: [0x07; 32]
-            }
+            crate::registry::Instruction::Init { owner: [0x07; 32] }
         );
         // bad program id rejected at open.
         let r = invoke(

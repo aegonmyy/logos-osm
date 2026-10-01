@@ -53,6 +53,9 @@ async fn main() -> anyhow::Result<()> {
     println!("program  : {program_account}");
     println!("registry : {}", built.accounts[0]);
     println!("region   : {}", built.accounts[1]);
-    println!("tx bytes : {} borsh instruction bytes", built.instruction.len());
+    println!(
+        "tx bytes : {} borsh instruction bytes",
+        built.instruction.len()
+    );
     Ok(())
 }

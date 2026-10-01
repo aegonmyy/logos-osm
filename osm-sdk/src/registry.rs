@@ -37,8 +37,8 @@ use lee_core::program::PdaSeed;
 use wallet::{AccountIdentity, AccountMention};
 
 pub use osm_core::{
-    Effect, Instruction, MAX_BATCH, MAX_MIRRORS, Mirror, RegionEntry, RegionRegistration,
-    RegistryState,
+    Effect, Instruction, Mirror, RegionEntry, RegionRegistration, RegistryState, MAX_BATCH,
+    MAX_MIRRORS,
 };
 
 /// The guest's fixed registry PDA seed (must match

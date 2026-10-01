@@ -41,14 +41,12 @@
 //! no program-owned-account claim to make.
 
 use lee_core::account::{AccountId, ShardData};
-use lee_core::program::{
-    AccountMeta, PdaSeed, Plan, PlanInput, ProgramId, run_program,
-};
+use lee_core::program::{run_program, AccountMeta, PdaSeed, Plan, PlanInput, ProgramId};
 
 use osm_core::set::{Level, REGIONS};
 use osm_core::{
-    Effect, Instruction, MAX_BATCH, MAX_MIRRORS, MAX_REGIONS, Mirror, RegionEntry,
-    RegionRegistration, RegistryState, region_seed,
+    region_seed, Effect, Instruction, Mirror, RegionEntry, RegionRegistration, RegistryState,
+    MAX_BATCH, MAX_MIRRORS, MAX_REGIONS,
 };
 
 /// Fixed PDA seed for the single registry account.
@@ -212,10 +210,7 @@ fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
 fn apply(effect: Effect, pre: &ShardData) -> Option<ShardData> {
     Some(match effect {
         Effect::Init { owner } => {
-            assert!(
-                pre.is_empty(),
-                "Init: registry already initialized"
-            );
+            assert!(pre.is_empty(), "Init: registry already initialized");
             ShardData::from(&RegistryState {
                 owner,
                 regions: Vec::new(),
@@ -417,9 +412,12 @@ mod tests {
             },
             &mut shards,
         );
-        let entry =
-            RegionEntry::try_from(shards.get(&region_pda_id(&program(), "us/california")).unwrap())
-                .unwrap();
+        let entry = RegionEntry::try_from(
+            shards
+                .get(&region_pda_id(&program(), "us/california"))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(entry.region, "us/california");
         // parent/level come from the table, not the client.
         assert_eq!(entry.parent, "us");
@@ -544,7 +542,10 @@ mod tests {
     fn batch_registers_multiple_regions() {
         let mut shards = registry_shard();
         let paths = ["germany", "france", "us/california"];
-        let mut accounts = vec![meta(registry_pda_id(&program()), false), signer_meta(REGISTRAR)];
+        let mut accounts = vec![
+            meta(registry_pda_id(&program()), false),
+            signer_meta(REGISTRAR),
+        ];
         for p in paths {
             accounts.push(meta(region_pda_id(&program(), p), false));
         }
@@ -565,8 +566,8 @@ mod tests {
         assert_eq!(st.region_count(), 3);
         assert_eq!(st.registration_count, 3);
         for p in paths {
-            let e = RegionEntry::try_from(shards.get(&region_pda_id(&program(), p)).unwrap())
-                .unwrap();
+            let e =
+                RegionEntry::try_from(shards.get(&region_pda_id(&program(), p)).unwrap()).unwrap();
             assert_eq!(e.region, p);
         }
     }
@@ -575,7 +576,10 @@ mod tests {
     #[should_panic(expected = "need 1..=24")]
     fn batch_over_cap_rejected() {
         let mut shards = registry_shard();
-        let mut accounts = vec![meta(registry_pda_id(&program()), false), signer_meta(REGISTRAR)];
+        let mut accounts = vec![
+            meta(registry_pda_id(&program()), false),
+            signer_meta(REGISTRAR),
+        ];
         let regs: Vec<RegionRegistration> = (0..=MAX_BATCH)
             .map(|i| {
                 let p = REGIONS[i % REGIONS.len()].path;
@@ -613,11 +617,14 @@ mod tests {
                 &mut shards,
             );
         }
-        let entry =
-            RegionEntry::try_from(shards.get(&region_pda_id(&program(), "kenya")).unwrap()).unwrap();
+        let entry = RegionEntry::try_from(shards.get(&region_pda_id(&program(), "kenya")).unwrap())
+            .unwrap();
         assert_eq!(entry.mirrors.len(), MAX_MIRRORS);
         // Oldest pruned; the latest is the newest registration.
         assert_eq!(entry.mirrors[0].timestamp, 4);
-        assert_eq!(entry.latest_mirror().unwrap().timestamp, MAX_MIRRORS as u64 + 3);
+        assert_eq!(
+            entry.latest_mirror().unwrap().timestamp,
+            MAX_MIRRORS as u64 + 3
+        );
     }
 }

@@ -20,11 +20,11 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use lee_core::account::AccountId;
-use osm_integration_tests::deploy_program;
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
     decode_registry_state, region_pda, registry_pda, RegionRegistration,
 };
+use osm_integration_tests::deploy_program;
 use test_fixtures::{TestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
 use wallet::cli::{
     account::{AccountSubcommand, NewSubcommand},
@@ -123,13 +123,20 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     ctx.wallet_mut().sync_to_latest_block().await?;
 
     // 3) Init.
-    submit(&mut ctx, &build_init(&program_account, &owner), &owner, "Init").await?;
+    submit(
+        &mut ctx,
+        &build_init(&program_account, &owner),
+        &owner,
+        "Init",
+    )
+    .await?;
     let reg_state: osm_core::RegistryState = {
         let acc = ctx
             .wallet()
             .get_account_public(registry_pda(&program_account))
             .await?;
-        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding RegistryState after Init")?
+        decode_registry_state(acc.data.shard(program_account).as_ref())
+            .context("decoding RegistryState after Init")?
     };
     assert_eq!(reg_state.initialized, 1);
     assert_eq!(reg_state.owner, *owner.value());
@@ -150,7 +157,8 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after A")?
+        decode_region_entry(acc.data.shard(program_account).as_ref())
+            .context("decoding germany after A")?
     };
     assert_eq!(entry.region, "germany");
     // parent/level come from the embedded table, not the client.
@@ -176,7 +184,8 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after B")?
+        decode_region_entry(acc.data.shard(program_account).as_ref())
+            .context("decoding germany after B")?
     };
     assert_eq!(entry.mirrors.len(), 2, "history must be append-only");
     assert_eq!(entry.registrars().len(), 2);
@@ -199,7 +208,8 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
     .await?;
     let entry = {
         let acc = ctx.wallet().get_account_public(germany_pda).await?;
-        decode_region_entry(acc.data.shard(program_account).as_ref()).context("decoding germany after C")?
+        decode_region_entry(acc.data.shard(program_account).as_ref())
+            .context("decoding germany after C")?
     };
     assert_eq!(entry.registrars().len(), 3, "adoption bar reached");
     assert_eq!(entry.latest_mirror().unwrap().version, 20260821);
@@ -244,7 +254,8 @@ async fn osm_registry_full_lifecycle_on_sequencer() -> Result<()> {
             .wallet()
             .get_account_public(registry_pda(&program_account))
             .await?;
-        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding final RegistryState")?
+        decode_registry_state(acc.data.shard(program_account).as_ref())
+            .context("decoding final RegistryState")?
     };
     assert_eq!(reg_state.region_count(), 4);
     assert_eq!(reg_state.registration_count, 6);

@@ -21,11 +21,11 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use lee::ProgramId;
 use lee_core::account::AccountId;
-use osm_integration_tests::{GENESIS_FUND_AMOUNT, deploy_program, fund_account_from_genesis};
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, decode_region_entry,
     decode_registry_state, region_pda, registry_pda, RegionRegistration,
 };
+use osm_integration_tests::{deploy_program, fund_account_from_genesis, GENESIS_FUND_AMOUNT};
 use wallet::cli::{
     account::{AccountSubcommand, NewSubcommand},
     Command, SubcommandReturnValue,
@@ -84,7 +84,11 @@ async fn send_and_await(
     let _ = program_account;
     let mentions = built.mentions(signer);
     let h = wallet
-        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
+        .send_pub_tx(
+            mentions,
+            built.instruction.clone(),
+            built.program_account_id,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{label} send_pub_tx failed: {e:?}"))?;
     net_retry!(wallet.poll_transaction(h), &format!("{label}-poll"));
@@ -193,7 +197,11 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
         .context("funding the deploy payer from the genesis account")?;
     net_retry!(wallet.sync_to_latest_block(), "post-funding-sync");
     let program_account = net_retry!(
-        deploy_program(&mut wallet, osm_registry::osm_registry_elf().to_vec(), payer),
+        deploy_program(
+            &mut wallet,
+            osm_registry::osm_registry_elf().to_vec(),
+            payer
+        ),
         "deploy"
     );
     net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
@@ -223,8 +231,11 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     )
     .await?;
     let reg_state: osm_core::RegistryState = {
-        let acc = wallet.get_account_public(registry_pda(&program_account)).await?;
-        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding RegistryState after Init")?
+        let acc = wallet
+            .get_account_public(registry_pda(&program_account))
+            .await?;
+        decode_registry_state(acc.data.shard(program_account).as_ref())
+            .context("decoding RegistryState after Init")?
     };
     assert_eq!(reg_state.initialized, 1);
     assert_eq!(reg_state.owner, *owner.value());
@@ -293,8 +304,11 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     assert_eq!(e.level, 1);
 
     let reg_state: osm_core::RegistryState = {
-        let acc = wallet.get_account_public(registry_pda(&program_account)).await?;
-        decode_registry_state(acc.data.shard(program_account).as_ref()).context("decoding final RegistryState")?
+        let acc = wallet
+            .get_account_public(registry_pda(&program_account))
+            .await?;
+        decode_registry_state(acc.data.shard(program_account).as_ref())
+            .context("decoding final RegistryState")?
     };
     assert_eq!(reg_state.region_count(), 3);
     assert_eq!(reg_state.registration_count, 3);

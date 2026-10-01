@@ -277,7 +277,9 @@ mod tests {
             mirrors: std::vec![Mirror {
                 registrar: [7; 32],
                 cid: "zDv...".into(),
-                source_url: "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf".into(),
+                source_url:
+                    "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf"
+                        .into(),
                 checksum: [1; 16],
                 version: 20260524,
                 timestamp: 1_780_000_000,

@@ -25,7 +25,7 @@ use std::{env, fs, path::Path};
 /// The program id of the committed `osm_registry.bin` (big-endian words).
 /// Hex: c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79
 const OSM_REGISTRY_ID: [u32; 8] = [
-    3262311484, 803814528, 2634252627, 890351606, 1994679932, 3204141803, 353159728, 4222193273
+    3262311484, 803814528, 2634252627, 890351606, 1994679932, 3204141803, 353159728, 4222193273,
 ];
 
 fn main() {
