@@ -213,6 +213,45 @@ jobs:
         run: |
           cargo test --release -p osm-integration-tests --test cycle_profile -- --ignored --nocapture
 
+  macos-run:
+    name: macOS run (cdylib loads + dispatches)
+    # The darwin-arm64 catalog variant proves the module BUILDS for macOS;
+    # this proves it RUNS there. GitHub-hosted Apple Silicon (macos-latest is
+    # arm64, matching the shipped darwin-arm64 variant), free for public
+    # repos. Builds the Rust core as a real .dylib on macOS, then dlopens it
+    # through the C ABI and requires a real op result (72-region closed set)
+    # — no ownership of Apple hardware required.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (1.98.1)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      - name: Install system deps
+        run: |
+          brew install pkg-config openssl@3 protobuf
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the Rust core (cdylib)
+        run: cargo build -p logos-osm --lib
+
+      - name: "Smoke: dlopen the .dylib + dispatch over the C ABI"
+        # scripts/osm_ffi_smoke.c is platform-agnostic POSIX dl code; it
+        # exits nonzero unless `regions` returns ok:true with count:72.
+        run: |
+          cc -o /tmp/osm_smoke scripts/osm_ffi_smoke.c
+          /tmp/osm_smoke target/debug/liblogos_osm.dylib
+
+      - name: SDK unit tests on macOS
+        run: cargo test -p logos-osm --lib
+
   lgx-bundles:
     name: .lgx bundles build + are callable
     # The nix-built plugin .so links against a newer glibc than ubuntu-22.04
