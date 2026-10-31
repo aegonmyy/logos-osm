@@ -202,7 +202,7 @@ pub async fn resolve_region(
     use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 
     let client = SequencerClientBuilder::default()
-        .build(sequencer_url.to_string())
+        .build(sequencer_url)
         .map_err(|e| anyhow::anyhow!("sequencer {sequencer_url}: {e}"))?;
     let pda = region_pda(program_account, region_path);
     let account = client

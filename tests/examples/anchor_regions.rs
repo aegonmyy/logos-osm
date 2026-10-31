@@ -86,6 +86,7 @@ fn anchor_dir() -> PathBuf {
     dir
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn load_state() -> AnchorState {
     let p = anchor_dir().join("anchor-state.json");
     let Ok(raw) = std::fs::read_to_string(&p) else {
@@ -115,12 +116,7 @@ fn save_state(s: &AnchorState) -> Result<()> {
     let done: serde_json::Map<String, _> = s
         .done
         .iter()
-        .map(|(k, (cid, md5, ver))| {
-            (
-                k.clone(),
-                json!({ "cid": cid, "md5": md5, "version": ver }),
-            )
-        })
+        .map(|(k, (cid, md5, ver))| (k.clone(), json!({ "cid": cid, "md5": md5, "version": ver })))
         .collect();
     let v = json!({
         "program_account_hex": s.program_account_hex,
@@ -168,7 +164,11 @@ async fn send_and_await(
 ) -> Result<()> {
     let mentions = built.mentions(signer);
     let h = wallet
-        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
+        .send_pub_tx(
+            mentions,
+            built.instruction.clone(),
+            built.program_account_id,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{label} send failed: {e:?}"))?;
     net_retry!(wallet.poll_transaction(h), format!("{label}-poll"));
@@ -190,8 +190,8 @@ async fn main() -> Result<()> {
     }
     let codex_url =
         std::env::var("OSM_CODEX_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
-    let testnet_url = std::env::var("OSM_TESTNET_URL")
-        .unwrap_or_else(|_| "https://testnet.lez.logos.co".into());
+    let testnet_url =
+        std::env::var("OSM_TESTNET_URL").unwrap_or_else(|_| "https://testnet.lez.logos.co".into());
 
     let dir = anchor_dir();
     println!("anchor dir : {}", dir.display());
@@ -263,9 +263,13 @@ async fn main() -> Result<()> {
         Some(h) => parse_account(h)?,
         None => {
             println!("deploying the committed registry program...");
-            let a = deploy_program(&mut wallet, osm_registry::osm_registry_elf().to_vec(), payer)
-                .await
-                .context("deploying the program")?;
+            let a = deploy_program(
+                &mut wallet,
+                osm_registry::osm_registry_elf().to_vec(),
+                payer,
+            )
+            .await
+            .context("deploying the program")?;
             state.program_account_hex = Some(hex::encode(a.value()));
             save_state(&state)?;
             net_retry!(wallet.sync_to_latest_block(), "post-deploy-sync");
@@ -296,20 +300,33 @@ async fn main() -> Result<()> {
     // A region already downloaded to <anchor>/prefetch/<region>.osm.pbf is
     // imported through the local path (same MD5 verification, same storage
     // upload, same registration) instead of being downloaded again.
-    let pending: Vec<&String> = regions.iter().filter(|r| !state.done.contains_key(*r)).collect();
+    let pending: Vec<&String> = regions
+        .iter()
+        .filter(|r| !state.done.contains_key(*r))
+        .collect();
     let mut hosted: Vec<(String, logos_osm::registry::RegionRegistration)> = Vec::new();
     if !pending.is_empty() {
         let client = OsmClient::new(CodexStorage::new(&codex_url), dir.join("cache"));
         for r in &pending {
             let local = dir.join("prefetch").join(format!("{r}.osm.pbf"));
-            println!("hosting {r}{}...", if local.exists() { " (from prefetch)" } else { "" });
+            println!(
+                "hosting {r}{}...",
+                if local.exists() {
+                    " (from prefetch)"
+                } else {
+                    ""
+                }
+            );
             let snap = if local.exists() {
                 client
                     .host_local(r, &local)
                     .await
                     .context(format!("importing the prefetched {r}"))?
             } else {
-                client.host_region(r).await.context(format!("hosting {r}"))?
+                client
+                    .host_region(r)
+                    .await
+                    .context(format!("hosting {r}"))?
             };
             client
                 .catalog_record_hosted(&snap)
@@ -321,9 +338,10 @@ async fn main() -> Result<()> {
                 hex::encode(snap.checksum),
                 snap.cid
             );
-            state
-                .done
-                .insert(r.to_string(), (snap.cid.clone(), hex::encode(snap.checksum), snap.version));
+            state.done.insert(
+                r.to_string(),
+                (snap.cid.clone(), hex::encode(snap.checksum), snap.version),
+            );
             // The registration the chain gets: the region, the CID, Geofabrik's
             // checksum, the version, and a timestamp.
             hosted.push(((**r).clone(), snap.registration(None)));
@@ -355,9 +373,9 @@ async fn main() -> Result<()> {
             );
             let has_entry = !acc.data.shard(program_account).is_empty();
             if !has_entry {
-                let checksum: [u8; 16] = hex::decode(md5)?
-                    .try_into()
-                    .map_err(|v: Vec<u8>| anyhow::anyhow!("md5 must be 16 bytes, got {}", v.len()))?;
+                let checksum: [u8; 16] = hex::decode(md5)?.try_into().map_err(|v: Vec<u8>| {
+                    anyhow::anyhow!("md5 must be 16 bytes, got {}", v.len())
+                })?;
                 to_register.push((
                     r.clone(),
                     logos_osm::registry::RegionRegistration {

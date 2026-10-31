@@ -146,10 +146,10 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
 
     // Patient polling: the public testnet produces blocks slowly.
     let overrides = WalletConfigOverrides {
-        sequencers: Some(vec![SequencerConnectionData {
+        sequencer: Some(SequencerConnectionData {
             sequencer_addr: testnet_url().parse().unwrap(),
             basic_auth: None,
-        }]),
+        }),
         seq_tx_poll_max_blocks: Some(200),
         seq_poll_max_retries: Some(2000),
         seq_poll_timeout: Some(Duration::from_secs(3)),
@@ -158,11 +158,9 @@ async fn osm_registry_lifecycle_on_public_testnet() -> Result<()> {
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
         dir.join("config.json"),
         dir.join("storage"),
-        dir.join("statistics.json"),
         Some(overrides),
         "testpw",
-    )
-    .await?;
+    )?;
 
     let start = net_retry!(wallet.sync_to_latest_block(), "initial-sync");
     println!("testnet: {} (start block {start})", testnet_url());

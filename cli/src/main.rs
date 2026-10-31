@@ -208,7 +208,7 @@ fn print_tx(
 /// Connect to the sequencer for read-only registry queries.
 fn chain_client(url: &str) -> Result<SequencerClient> {
     SequencerClientBuilder::default()
-        .build(url.to_string())
+        .build(url)
         .with_context(|| format!("--sequencer is not a usable URL: {url}"))
 }
 

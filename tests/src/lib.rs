@@ -126,7 +126,7 @@ pub async fn fund_account_from_genesis(
     let witness_set = WitnessSet::for_message(&message, &[&source.pub_sign_key]);
     let tx = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
 
-    let client = SequencerClientBuilder::default().build(sequencer_url.to_string())?;
+    let client = SequencerClientBuilder::default().build(sequencer_url)?;
     let hash = client
         .send_transaction(tx)
         .await

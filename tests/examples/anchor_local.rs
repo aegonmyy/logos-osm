@@ -68,7 +68,11 @@ async fn send_and_await(
     let mentions = built.mentions(signer);
     let h = ctx
         .wallet_mut()
-        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
+        .send_pub_tx(
+            mentions,
+            built.instruction.clone(),
+            built.program_account_id,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{label} send_pub_tx failed: {e:?}"))?;
     ctx.wallet_mut()
@@ -138,13 +142,19 @@ async fn main() -> Result<()> {
 
     // ---- deploy ----
     println!("deploying the committed registry program...");
-    let program_account =
-        deploy_program(ctx.wallet_mut(), osm_registry::osm_registry_elf().to_vec(), payer)
-            .await
-            .context("deploying the program")?;
+    let program_account = deploy_program(
+        ctx.wallet_mut(),
+        osm_registry::osm_registry_elf().to_vec(),
+        payer,
+    )
+    .await
+    .context("deploying the program")?;
     wait_block().await;
     ctx.wallet_mut().sync_to_latest_block().await?;
-    println!("  program account: {}", hex::encode(program_account.value()));
+    println!(
+        "  program account: {}",
+        hex::encode(program_account.value())
+    );
 
     // ---- Init ----
     println!("Init: binding the registry owner...");
@@ -161,14 +171,24 @@ async fn main() -> Result<()> {
     let mut hosted: Vec<(String, logos_osm::registry::RegionRegistration)> = Vec::new();
     for r in &regions {
         let local = dir.join("prefetch").join(format!("{r}.osm.pbf"));
-        println!("hosting {r}{}...", if local.exists() { " (from prefetch)" } else { "" });
+        println!(
+            "hosting {r}{}...",
+            if local.exists() {
+                " (from prefetch)"
+            } else {
+                ""
+            }
+        );
         let snap = if local.exists() {
             client
                 .host_local(r, &local)
                 .await
                 .context(format!("importing the prefetched {r}"))?
         } else {
-            client.host_region(r).await.context(format!("hosting {r}"))?
+            client
+                .host_region(r)
+                .await
+                .context(format!("hosting {r}"))?
         };
         client
             .catalog_record_hosted(&snap)
@@ -194,7 +214,7 @@ async fn main() -> Result<()> {
 
     // ---- verify readback ----
     let mut summary = serde_json::Map::new();
-    let mut failures = 0;
+    let failures = 0;
     for r in &regions {
         let acc = ctx
             .wallet()
@@ -204,7 +224,10 @@ async fn main() -> Result<()> {
             .with_context(|| format!("decoding the on-chain entry for {r}"))?;
         let mirror_count = entry.mirrors.len();
         let latest = entry.latest_mirror();
-        println!("  {r}: {mirror_count} mirror(s), latest cid {}", latest.map(|m| m.cid.clone()).unwrap_or_default());
+        println!(
+            "  {r}: {mirror_count} mirror(s), latest cid {}",
+            latest.map(|m| m.cid.clone()).unwrap_or_default()
+        );
         summary.insert(
             r.clone(),
             json!({

@@ -41,12 +41,12 @@
 //! no program-owned-account claim to make.
 
 use lee_core::account::{AccountId, ShardData};
-use lee_core::program::{run_program, AccountMeta, PdaSeed, Plan, PlanInput, ProgramId};
+use lee_core::program::{run_program, AccountMeta, PdaSeed, Plan, PlanInput};
 
 use osm_core::set::{Level, REGIONS};
 use osm_core::{
-    region_seed, Effect, Instruction, Mirror, RegionEntry, RegionRegistration, RegistryState,
-    MAX_BATCH, MAX_MIRRORS, MAX_REGIONS,
+    region_seed, Effect, Instruction, Mirror, RegionEntry, RegistryState, MAX_BATCH, MAX_MIRRORS,
+    MAX_REGIONS,
 };
 
 /// Fixed PDA seed for the single registry account.
@@ -310,7 +310,9 @@ fn exactly<const N: usize>(accounts: &[AccountMeta]) -> [&AccountMeta; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lee_core::program::ProgramId;
     use osm_core::set::by_path;
+    use osm_core::RegionRegistration;
     use std::collections::HashMap;
 
     const PROG_ID: ProgramId = [1, 0, 0, 0, 0, 0, 0, 0];
