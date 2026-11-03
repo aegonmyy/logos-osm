@@ -32,10 +32,26 @@ if [[ -z "$PLUGIN" ]]; then
   PLUGIN="$WORK/variants/linux-amd64-dev/osm_plugin.so"
 fi
 
+# Bundled core: since v1.1.0 the .lgx carries liblogos_osm.so next to the
+# plugin (module/metadata.json `include` + the plugin's $ORIGIN RPATH), so
+# prefer the bundled core over a cargo build when the caller gave no path.
+BUNDLED="$(dirname "$PLUGIN")/liblogos_osm.so"
+if [[ -z "$FFI" && -z "${SMOKE_NO_FFI:-}" && -f "$BUNDLED" ]]; then
+  FFI="$BUNDLED"
+  echo ">> ffi:    (bundled in the .lgx next to the plugin)"
+fi
+
 if [[ -z "$FFI" && -z "${SMOKE_NO_FFI:-}" ]]; then
   echo ">> building Rust osm core (cargo release)..."
   cargo build -p logos-osm --release >/dev/null
   FFI="$PWD/target/release/liblogos_osm.so"
+fi
+
+# SMOKE_NO_FFI asserts the fail-closed path of a plugin with NO core
+# available; since the bundle now ships one, hide it for that leg.
+if [[ -n "${SMOKE_NO_FFI:-}" && -f "$BUNDLED" ]]; then
+  echo ">> hiding the bundled core to exercise the fail-closed path"
+  mv "$BUNDLED" "$BUNDLED.hidden"
 fi
 
 echo ">> plugin: $PLUGIN"
