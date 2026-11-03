@@ -1,0 +1,10 @@
+{
+    "rapidsnark": {
+        "0.0.8": {
+            "x86_64-linux":   "sha256-88+TkECQYCKBN0WbYLRB+qi6TEhbjVfrpCqlSgm0DR8=",
+            "aarch64-linux":  "sha256-kcSITwWZjEv9gadzYL7LiG+DVtEEFbQJuhd/LTyOxJU=",
+            "aarch64-darwin": "sha256-DmhMmMq7/HKsx+Iz4rdsKYBDEwqwMZALo+ZJePJvAJg=",
+            "x86_64-darwin":  "sha256-/GCXzzT5mkBeXkVQAGEF9OmJXXcYz4KoXNzjFvhSgNU="
+        }
+    }
+}

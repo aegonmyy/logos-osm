@@ -36,6 +36,14 @@ bytes.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 
+# Windows: rapidsnark has no shared library, and prebuilts exist only for
+# the GNU toolchain (the Logos fork's static archives). Declaring the dep
+# here with the feature turns it on for the whole graph via feature
+# unification — but ONLY on Windows targets, so Linux keeps the shared-lib
+# path that v1.1.0 already ships.
+[target.'cfg(windows)'.dependencies]
+rust-rapidsnark = { git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f", features = ["static-rapidsnark"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

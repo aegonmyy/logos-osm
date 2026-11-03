@@ -1,0 +1,5 @@
+# Force LF for files that are read programmatically (Nix, shell scripts).
+# CRLF in RAPIDSNARK_VERSION causes a silent nix-hashes.json lookup failure.
+RAPIDSNARK_VERSION text eol=lf
+*.sh              text eol=lf
+*.nix             text eol=lf

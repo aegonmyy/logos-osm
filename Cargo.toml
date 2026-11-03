@@ -67,3 +67,19 @@ tempfile = "3"
 
 [profile.release]
 lto = "thin"
+
+# Windows: the pinned rapidsnark rev (via logos-execution-zone v0.3.1)
+# predates Windows support. The local copy carries two fixes: the c_ulong
+# type in groth16_verify's call site (u32 on Windows, u64 on Linux) and the
+# c_ulonglong in the prover call. Linux behavior is unchanged; Windows
+# builds also enable static-rapidsnark via osm-sdk's cfg(windows) dep.
+[patch."https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git"]
+rust-rapidsnark = { path = "vendor/rapidsnark/crates" }
+
+# Windows: risc0-zkvm 3.0.5's DefaultProver uses Unix-only socket types and
+# does not compile for Windows targets at all. We are pinned to 3.0.5 for
+# guest compatibility, so vendor it with the prove/default module compiled
+# out on Windows (local actor proving is unused by the SDK). Linux is
+# unchanged.
+[patch.crates-io]
+risc0-zkvm = { path = "vendor/risc0-zkvm" }

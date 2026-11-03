@@ -36,6 +36,39 @@ Item {
     // below parses lastResult when it changes and routes it.
     property string pendingOp: ""
     property int    pendingRow: -1        // Regions tab: row awaiting a lookup
+    property string discoverState: "pending"   // pending | ok | error
+    property int    regionsAvailable: 0
+    property int    regionsTotal: 72
+    property string discoverError: ""
+
+    // Auto-init: open the SDK session on startup; discover follows once the
+    // session is up. The user never thinks about "Open" — the fields above
+    // are applied automatically, and editing them re-fires on the next
+    // restart (state persists under the module data tree).
+    function openArgs() {
+        const args = {
+            // Absolute path: the module host's CWD is not stable (it can
+            // even be a deleted dir), so relative state paths break.
+            state_path: "/home/codespace/.local/share/Logos/LogosBasecamp/module_data/osm/osm-state.json",
+            storage_url: storageUrl.text,
+            geofabrik_url: geofabrikUrl.text,
+            cache_dir: cacheDir.text,
+            // The registry this app talks to on the live LEZ testnet: the
+            // OSM guest program deployed 2026-10-30.
+            program_account_hex: "b2fa65027d9b2540d4ac2aa4e0a38040ac03604c2201930592c547f3d65ecb43"
+        }
+        if (registrar.text.length) args.registrar_hex = registrar.text
+        return args
+    }
+
+    function runDiscover() {
+        root.discoverState = "pending"
+        root.call("discover")
+    }
+
+    Component.onCompleted: {
+        root.call("open", root.openArgs())
+    }
 
     function call(op, args, tag) {
         if (!root.bk) return
@@ -49,6 +82,20 @@ Item {
     // ops (regions, lookup) also update the Regions tab's model.
     function onOpResult(op, r) {
         const consoleText = root.pretty(r)
+
+        if (op === "open") {
+            if (r.ok) root.runDiscover()
+        } else if (op === "discover") {
+            if (r.ok && r.result) {
+                root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
+                root.regionsTotal = r.result.total_set !== undefined ? r.result.total_set : 72
+                root.discoverState = "ok"
+                root.discoverError = ""
+            } else {
+                root.discoverState = "error"
+                root.discoverError = r.error || "discover failed"
+            }
+        }
         if (root.currentTab === 0)      out.outputText  = consoleText
         else if (root.currentTab === 1) outR.outputText = consoleText
         else                            out2.outputText = consoleText
@@ -451,6 +498,59 @@ Item {
                         Layout.maximumWidth: 380
                     }
                 }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.runDiscover()
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Re-run the live Geofabrik cross-check"
+                    hoverEnabled: true
+                }
+            }
+
+            // ---- Regions availability chip (auto-discover; click to refresh) ----
+            Rectangle {
+                id: regionsChip
+                objectName: "regionsChip"
+                Layout.alignment: Qt.AlignTop
+                Layout.topMargin: 5
+                radius: 4
+                color: Qt.rgba(0.961, 0.890, 0.788, 0.06)
+                border.width: 1
+                border.color: Qt.rgba(0.961, 0.890, 0.788, 0.30)
+                implicitHeight: regionsChipRow.implicitHeight + 14
+                implicitWidth: regionsChipRow.implicitWidth + 24
+                RowLayout {
+                    id: regionsChipRow
+                    anchors.centerIn: parent
+                    spacing: 10
+                    Text {
+                        text: "REGIONS"
+                        font.family: root.fSans
+                        font.pixelSize: 11
+                        font.letterSpacing: 1.4
+                        font.weight: Font.Medium
+                        color: Qt.rgba(0.961, 0.890, 0.788, 0.75)
+                    }
+                    Text {
+                        text: {
+                            if (root.discoverState === "pending") return "checking…"
+                            if (root.discoverState === "error") return "unavailable"
+                            return root.regionsAvailable + "/" + root.regionsTotal
+                        }
+                        font.family: root.fMono
+                        font.pixelSize: 11
+                        color: root.discoverState === "error" ? root.cBrown : root.cTan
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.runDiscover()
+                    ToolTip.visible: hovered
+                    ToolTip.text: root.discoverState === "error" ? root.discoverError : "Live Geofabrik cross-check — click to refresh"
+                    hoverEnabled: true
+                }
             }
         }
 
@@ -561,32 +661,8 @@ Item {
                     }
                     RowLayout {
                         spacing: 12
-                        PButton {
-                            text: "Open"
-                            onClicked: {
-                                const args = {
-                                    // Absolute path: the module host's CWD is
-                                    // not stable (it can even be a deleted dir),
-                                    // so relative state paths break.
-                                    state_path: "/home/codespace/.local/share/Logos/LogosBasecamp/module_data/osm/osm-state.json",
-                                    storage_url: storageUrl.text,
-                                    geofabrik_url: geofabrikUrl.text,
-                                    cache_dir: cacheDir.text,
-                                    // The registry this app talks to on the live
-                                    // LEZ testnet: the OSM guest program deployed
-                                    // 2026-10-30 (see ~/osm-anchor/summary.json).
-                                    program_account_hex: "b2fa65027d9b2540d4ac2aa4e0a38040ac03604c2201930592c547f3d65ecb43"
-                                }
-                                if (registrar.text.length) args.registrar_hex = registrar.text
-                                root.call("open", args)
-                            }
-                        }
                         SButton {
-                            text: "Discover (live cross-check)"
-                            onClicked: root.call("discover")
-                        }
-                        SButton {
-                            text: "Region set"
+                            text: "List regions"
                             onClicked: root.call("regions")
                         }
                         Item { Layout.fillWidth: true }
@@ -714,7 +790,7 @@ Item {
                     }
                     Item { Layout.fillWidth: true }
                     PButton {
-                        text: "Load set"
+                        text: "List regions"
                         onClicked: root.call("regions")
                     }
                 }

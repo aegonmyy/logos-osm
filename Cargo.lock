@@ -5851,6 +5851,7 @@ dependencies = [
  "osm-registry",
  "reqwest 0.12.28",
  "risc0-zkvm",
+ "rust-rapidsnark",
  "sequencer_service_rpc",
  "serde",
  "serde_json",
@@ -8229,8 +8230,6 @@ dependencies = [
 [[package]]
 name = "risc0-zkvm"
 version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22b7eafb5d85be59cbd9da83f662cf47d834f1b836e14f675d1530b12c666867"
 dependencies = [
  "addr2line",
  "anyhow",
@@ -8431,7 +8430,6 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 [[package]]
 name = "rust-rapidsnark"
 version = "0.1.3"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git?rev=e91187f8ccb5bbfc7bb00dac88169112428da78f#e91187f8ccb5bbfc7bb00dac88169112428da78f"
 dependencies = [
  "anyhow",
  "cc",
