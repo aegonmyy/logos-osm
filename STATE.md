@@ -5,6 +5,37 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-03) — packaging fix + app async fix
+
+Two changes landed on `main` today (v1.1.0):
+
+1. **`.lgx` now bundles the Rust core** (module/metadata.json: the vendored
+   `module/vendor/<nix-system>/liblogos_osm.so` is declared under
+   `nix.external_libraries` and staged into the module lib dir via the
+   top-level `include` list). The plugin's RPATH is `$ORIGIN`, so the
+   bundled lib resolves at runtime with no env vars. Before this, a fresh
+   catalog install loaded the module but every op failed closed with
+   "cannot load liblogos_osm.so" — evaluator-fatal, found 2026-10-31 in
+   the live demo environment. Only linux-amd64 is vendored today (the
+   only cdylib this box can build); other platforms keep the
+   `LOGOS_OSM_FFI_PATH` env override and fail closed gracefully.
+   Multi-platform vendoring needs CI-built cdylibs (macOS runner for the
+   dylib; windows cross) — follow-up.
+2. **The Basecamp app's QML uses async dispatch** (app/src/qml/Main.qml):
+   `logos.module()` returns a Qt RemoteObjects DYNAMIC REPLICA — a QML
+   method call on it returns a default value immediately; results only
+   arrive via property sync (`lastResult`). The old `call()` read the
+   return value, so every op showed `{"ok":false,"error":""}` while the
+   op actually executed. Now ops are fire-and-tag and results route from
+   `lastResult` changes; errors surface the same way. Open args also use
+   absolute state paths (a module host's CWD can be a deleted dir).
+   Verified live end-to-end (chain lookup through the GUI) in the demo
+   environment on 2026-11-01.
+
+Release flow for the catalog: bump the `submodules/logos-osm` pointer in
+`aegonmyy/logos-modules-release-base`, then dispatch
+`release-logos-osm.yml` / `release-logos-osm-app.yml` (workflow_dispatch).
+
 ## 🤝 STATE AT HANDOFF (2026-09-30) — read this first
 
 **Where things are:** `main`, at the tip of `aegonmyy/logos-osm`. The v0.3

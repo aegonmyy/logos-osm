@@ -6,3 +6,7 @@ osm-cache/
 osm-state.json
 osm-perf/
 /dist
+
+# Vendored prebuilt Rust cdylib for the module's .lgx (see STATE.md
+# 2026-11-03). Must be tracked so nix flakes can see it.
+!module/vendor/**/liblogos_osm.so

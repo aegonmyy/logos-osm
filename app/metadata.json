@@ -1,6 +1,6 @@
 {
   "name": "osm_app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Basecamp app for the OpenStreetMap distribution registry: browse the region set, host snapshots to Logos Storage, build LEZ registrations, fetch and import",
   "type": "ui_qml",
   "category": "ui",
