@@ -2,7 +2,15 @@
   description = "OpenStreetMap distribution on Logos — Geofabrik hosting, Logos Storage mirrors, LEZ region registry, and a Basecamp app";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder";
+    logos-module-builder = {
+      url = "github:logos-co/logos-module-builder";
+      # Override the builder's bundler with our fork: it adds ktmw32 to
+      # the Windows system-DLL allowlist (RocksDB's KTM import) on top of
+      # upstream main, which already allowlists winscard/bcryptprimitives
+      # — our pinned lock predated those. Remove once upstream merges
+      # ktmw32.
+      inputs.nix-bundle-lgx.url = "github:aegonmyy/nix-bundle-lgx/main";
+    };
     nixpkgs.follows = "logos-module-builder/nixpkgs";
   };
 
