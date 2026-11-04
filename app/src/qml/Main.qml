@@ -389,6 +389,10 @@ Item {
                 Layout.fillHeight: true
                 readOnly: true
                 wrapMode: TextArea.Wrap
+                // Explicit scrollbar: the hosting page is a Flickable that
+                // eats wheel events, so overflowing results need a draggable
+                // bar to climb.
+                ScrollBar.vertical: ConsoleScrollBar { }
                 font.family: root.fMono
                 font.pixelSize: 12
                 color: root.cTan
