@@ -2,6 +2,8 @@ name: Build and Test
 
 on:
     push:
+        branches:
+            - "logos/**"
     pull_request:
         types:
             - opened
@@ -15,7 +17,6 @@ env:
 jobs:
     clippy_check:
         runs-on: ubuntu-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         env:
             RUSTFLAGS: "-Dwarnings" # Make sure CI fails on all warnings, including Clippy lints
         steps:
@@ -24,34 +25,31 @@ jobs:
               run: cargo clippy --all-targets --all-features
     lint:
         runs-on: ubuntu-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         steps:
             - uses: actions/checkout@v5
 
             - name: Check formatting
               run: cargo fmt --all -- --check
     build-ios:
+        # Disabled: Logos doesn't ship mobile.
+        if: false
         runs-on: macos-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         strategy:
             matrix:
                 target:
                     - aarch64-apple-ios
                     - aarch64-apple-ios-sim
-                    - x86_64-apple-ios
         steps:
             - name: Checkout Repository
               uses: actions/checkout@v5
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  toolchain: "1.89.0"
-                  targets: ${{ matrix.target }}
+            - name: Install Rust target
+              run: rustup target add ${{ matrix.target }}
             - name: Build
               run: cargo build --target ${{ matrix.target }}
     build-android:
+        # Disabled: Logos doesn't ship mobile.
+        if: false
         runs-on: ubuntu-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         strategy:
             matrix:
                 target:
@@ -60,48 +58,87 @@ jobs:
         steps:
             - name: Checkout Repository
               uses: actions/checkout@v5
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  toolchain: "1.89.0"
-                  targets: ${{ matrix.target }}
+            - name: Install Rust target
+              run: rustup target add ${{ matrix.target }}
             - name: Install Android NDK
               run: cargo install cargo-ndk
             - name: Build
               run: cargo ndk -t ${{ matrix.target }} build
     test-linux:
         runs-on: ubuntu-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         steps:
             - uses: actions/checkout@v5
-            - name: Install Rust toolchain
-              uses: actions-rs/toolchain@v1
-              with:
-                  toolchain: "1.89.0"
-                  override: true
             - name: Run tests
               run: cargo test
+            - name: Run tests (static rapidsnark)
+              run: cargo test --features rust-rapidsnark/static-rapidsnark
+    test-linux-arm64:
+        runs-on: ubuntu-24.04-arm
+        steps:
+            - uses: actions/checkout@v5
+            - name: Run tests
+              run: cargo test
+            - name: Run tests (static rapidsnark)
+              run: cargo test --features rust-rapidsnark/static-rapidsnark
     test-macOS:
         runs-on: macos-latest
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
         steps:
             - uses: actions/checkout@v5
-            - name: Install Rust toolchain
-              uses: actions-rs/toolchain@v1
-              with:
-                  toolchain: "1.89.0"
-                  override: true
             - name: Run tests
               run: cargo test
+            - name: Run tests (static rapidsnark)
+              run: cargo test --features rust-rapidsnark/static-rapidsnark
     test-macOS-x86_64:
-        runs-on: macos-13
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+        runs-on: macos-15-intel
         steps:
             - uses: actions/checkout@v5
-            - name: Install Rust toolchain
-              uses: actions-rs/toolchain@v1
-              with:
-                  toolchain: "1.89.0"
-                  override: true
             - name: Run tests
               run: cargo test
+            - name: Run tests (static rapidsnark)
+              run: cargo test --features rust-rapidsnark/static-rapidsnark
+    # Built on Linux with logos-nix's MinGW, the toolchain the rapidsnark fork's Windows libraries are built with.
+    build-windows:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+            - name: Install Rust target
+              run: rustup target add x86_64-pc-windows-gnu
+            - name: Build tests
+              run: |
+                  nix develop .#windows-cross -c cargo test --no-run --target x86_64-pc-windows-gnu \
+                      --features rust-rapidsnark/static-rapidsnark --message-format=json-render-diagnostics > build.json
+            # The test binaries run on Windows, so copy them out for upload, by crate,
+            # because each one must run from its crate's directory to find its test vectors.
+            - name: Stage test binaries
+              run: |
+                  jq -r 'select(.profile.test) | "\(.manifest_path) \(.executable)"' build.json |
+                      while read -r manifest exe; do
+                          dir=dist/$(basename "$(dirname "$manifest")")
+                          mkdir -p "$dir" && cp "$exe" "$dir/"
+                      done
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: windows-tests
+                  path: dist
+                  if-no-files-found: error
+    test-windows:
+        needs: build-windows
+        runs-on: windows-latest
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - uses: actions/checkout@v5
+            - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+              with:
+                  name: windows-tests
+                  path: dist
+            - name: Run tests
+              run: |
+                  for dir in dist/*/; do
+                      crate=$(basename "$dir")
+                      for exe in "$dir"*.exe; do
+                          (cd "$crate" && "../$exe")
+                      done
+                  done

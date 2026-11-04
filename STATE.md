@@ -5,6 +5,20 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-04) — Windows core built and vendored
+
+`logos_osm.dll` (43 MB, x86_64-pc-windows-gnu, cross-compiled from Linux)
+is built and vendored at `module/vendor/x86_64-windows/`; the flake's
+postInstall copies it into the Windows `.lgx` next to the plugin, whose
+$ORIGIN RPATH resolves it. The full build recipe — nine dependency walls,
+each documented — is `scripts/build-windows-cdylib.sh`, mirrored by the
+`Build Windows cdylib` CI workflow. Walls: rapidsnark (vendored the
+windows-support rev of the crate), circuits statics (prebuilt artifact +
+.lib→lib*.a), risc0-zkvm (unix-only prover compiled out via vendored
+patch), rocksdb (posix-thread mingw), md5-asm (feature-gated off
+windows), mcfgthread (official runtime + link-order resolvers
+-lssp -lkernel32 -lntdll). Version 1.2.0 ships it.
+
 ## 🤝 STATE AT HANDOFF (2026-11-03) — packaging fix + app async fix
 
 Two changes landed on `main` today (v1.1.0):

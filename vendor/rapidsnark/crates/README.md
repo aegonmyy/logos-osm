@@ -49,16 +49,9 @@ let zkey_path = "./test-vectors/multiplier2_final.zkey";
 let proof = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_buffer).unwrap();
 ```
 
-You can also prove from an in-memory zkey buffer:
-
-```rust
-let zkey_buffer = std::fs::read("./test-vectors/multiplier2_final.zkey")?;
-let proof = rust_rapidsnark::groth16_prover_zkey_buffer_wrapper(&zkey_buffer, &wtns_buffer)?;
-```
-
 ### Verify the proof
 
-Verify the proof by using the `groth16_verify_wrapper` function.
+Verify the proof by using the `groth16_verifier_zkey_file_wrapper` function.
 
 ```rust
 let vkey = std::fs::read_to_string("./test-vectors/keccak256_256_test.vkey.json")?;
@@ -70,6 +63,10 @@ let valid = rust_rapidsnark::groth16_verify_wrapper(
 ```
 
 ## Supported platforms
+
+The static libraries are downloaded at build time from the upstream
+[iden3/rapidsnark](https://github.com/iden3/rapidsnark) release, which publishes
+prebuilt libraries for:
 
 ### Linux
 
@@ -85,12 +82,25 @@ let valid = rust_rapidsnark::groth16_verify_wrapper(
 
 -   aarch64-apple-ios
 -   aarch64-apple-ios-sim
--   x86_64-apple-ios
 
 ### Android
 
 -   aarch64-linux-android
 -   x86_64-linux-android
+
+Upstream publishes no x86_64 build of `libfr.a` and `libfq.a` for the iOS
+simulator, so `x86_64-apple-ios` needs libraries supplied through
+`RAPIDSNARK_LIB_DIR`. A target outside this list falls back to the generic build
+for its architecture, which may not link.
+
+## Build configuration
+
+-   `RAPIDSNARK_LIB_DIR` links `librapidsnark.a`, `libfr.a`, `libfq.a` and
+    `libgmp.a` out of a directory you provide and skips the download, which is
+    what you want for offline builds or locally compiled rapidsnark.
+-   `RAPIDSNARK_DOWNLOAD_BASE_URL` fetches the pinned release assets from a
+    mirror rather than from GitHub. The assets must be byte identical, since
+    each one is checked against a pinned sha256.
 
 ## Community
 

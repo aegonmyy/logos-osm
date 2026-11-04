@@ -25,6 +25,18 @@
         src = ./module;
         configFile = ./module/metadata.json;
         flakeInputs = inputs;
+        # Windows: bundle the Rust core next to the plugin so its $ORIGIN
+        # RPATH resolves it with no env vars. The dll is cross-built by
+        # scripts/build-windows-cdylib.sh and committed under
+        # module/vendor/x86_64-windows/. Other platforms: the Linux core is
+        # staged via metadata `include` + `external_libraries`; darwin is
+        # pending a CI-built dylib.
+        postInstall = ''
+          if ls "$out"/lib/*.dll >/dev/null 2>&1 && [ -f "${toString ./module}/vendor/x86_64-windows/logos_osm.dll" ]; then
+            cp -L "${toString ./module}/vendor/x86_64-windows/logos_osm.dll" "$out"/lib/
+            echo "vendored windows core (logos_osm.dll)"
+          fi
+        '';
       };
 
       # The Basecamp app (QML): host/registrar and consumer flows. Talks to

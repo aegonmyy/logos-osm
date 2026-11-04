@@ -22,7 +22,7 @@ wallet.workspace = true
 sequencer_service_rpc.workspace = true
 risc0-zkvm.workspace = true
 sha2.workspace = true
-md-5 = { workspace = true, features = ["asm"] }
+md-5.workspace = true
 hex.workspace = true
 borsh.workspace = true
 serde.workspace = true
@@ -35,6 +35,11 @@ futures.workspace = true
 bytes.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+
+# md5-asm does not support Windows targets; gate the asm feature to
+# non-Windows (the pure-Rust implementation is fine there).
+[target.'cfg(not(windows))'.dependencies]
+md-5 = { workspace = true, features = ["asm"] }
 
 # Windows: rapidsnark has no shared library, and prebuilts exist only for
 # the GNU toolchain (the Logos fork's static archives). Declaring the dep

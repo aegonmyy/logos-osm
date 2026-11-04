@@ -1,13 +1,13 @@
 name: Build Windows cdylib
 
-# Builds liblogos_osm (logos_osm.dll) natively on Windows so it can be
-# vendored into module/vendor/x86_64-windows/ and bundled in the .lgx
-# (the Linux cross route is blocked: rapidsnark ships no
-# x86_64-pc-windows-gnu asset mapping).
+# Cross-builds logos_osm.dll from Linux with the posix-thread mingw
+# toolchain (the MSVC route is blocked: rapidsnark has no windows-msvc
+# prebuilt; Ubuntu's default win32-threads mingw breaks rocksdb's
+# std::mutex). scripts/build-windows-cdylib.sh is the full recipe.
 #
-# Output: workflow artifact "logos_osm.dll".
-# After downloading: commit to module/vendor/x86_64-windows/, bump the
-# module version, push, and dispatch the release workflow.
+# Output: workflow artifact "logos_osm_dll". After downloading: commit to
+# module/vendor/x86_64-windows/, bump the module version, push, and
+# dispatch the release workflow.
 
 on:
   workflow_dispatch:
@@ -17,8 +17,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -26,17 +26,13 @@ jobs:
         shell: bash
         run: rustup show active-toolchain || rustup toolchain install
 
-      - name: Install native build deps (protoc for the LEZ wallet)
-        shell: pwsh
-        run: choco install -y --no-progress protoc --version=25.2 2>$null; Write-Host "protoc step done"
-
-      - name: Build the cdylib
+      - name: Build the cdylib (mingw-posix cross; downloads static libs)
         shell: bash
-        run: cargo build -p logos-osm --release
+        run: ./scripts/build-windows-cdylib.sh
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: logos_osm_dll
-          path: target/release/logos_osm.dll
+          path: target/x86_64-pc-windows-gnu/release/logos_osm.dll
           if-no-files-found: error

@@ -1,6 +1,28 @@
-# Rust Rapidsnark
+> [!NOTE]
+> This is the [Logos Blockchain](https://github.com/logos-blockchain) fork of
+> [zkmopro/rust-rapidsnark](https://github.com/zkmopro/rust-rapidsnark), used for Groth16 proving in the
+> [Logos Blockchain node](https://github.com/logos-blockchain/logos-blockchain).
+> On top of upstream it adds:
+>
+> -   **Dynamic or static linking.** By default, only the shared rapidsnark library is linked.
+>     It contains its own `Fr_*`, `Fq_*` and GMP symbols, so they can't collide with other native ZK libraries.
+>     The `static-rapidsnark` feature links the static libraries instead. iOS and Android are always static.
+> -   **Static libraries from the [Logos rapidsnark fork](https://github.com/logos-blockchain/logos-blockchain-rapidsnark).**
+>     With `static-rapidsnark`, Linux and macOS use the fork's PIC libraries.
+> -   **Windows support.** `x86_64-pc-windows-gnu`, with `static-rapidsnark`.
+> -   **Buffer prover.** `groth16_prover_zkey_buffer_wrapper` takes the zkey from memory, not from a file.
+> -   **Pinned Rust toolchain.** [`rust-toolchain.toml`](./rust-toolchain.toml) sets the Rust version to match the
+>     Logos Blockchain node, not the one upstream uses.
+>
+> This fork is not published to crates.io. Depend on it as a git dependency pinned by tag:
+>
+> ```toml
+> rust-rapidsnark = { git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", tag = "v0.1.4-logos.1" }
+> ```
+>
+> See [CONTRIBUTING.md](./CONTRIBUTING.md) for how this fork is maintained.
 
-[![Crates.io](https://img.shields.io/crates/v/rust-rapidsnark?label=rust-rapidsnark)](https://crates.io/crates/rust-rapidsnark)
+# Rust Rapidsnark
 
 This project provides a Rust adapter for compiling and linking [Rapidsnark](https://github.com/iden3/rapidsnark) into a native library for target platforms (e.g., mobile devices). It includes macros and functions to facilitate the integration of proof generation into Rust codebases.
 
@@ -49,16 +71,9 @@ let zkey_path = "./test-vectors/multiplier2_final.zkey";
 let proof = rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, wtns_buffer).unwrap();
 ```
 
-You can also prove from an in-memory zkey buffer:
-
-```rust
-let zkey_buffer = std::fs::read("./test-vectors/multiplier2_final.zkey")?;
-let proof = rust_rapidsnark::groth16_prover_zkey_buffer_wrapper(&zkey_buffer, &wtns_buffer)?;
-```
-
 ### Verify the proof
 
-Verify the proof by using the `groth16_verify_wrapper` function.
+Verify the proof by using the `groth16_verifier_zkey_file_wrapper` function.
 
 ```rust
 let vkey = std::fs::read_to_string("./test-vectors/keccak256_256_test.vkey.json")?;
@@ -70,6 +85,10 @@ let valid = rust_rapidsnark::groth16_verify_wrapper(
 ```
 
 ## Supported platforms
+
+The static libraries are downloaded at build time from the upstream
+[iden3/rapidsnark](https://github.com/iden3/rapidsnark) release, which publishes
+prebuilt libraries for:
 
 ### Linux
 
@@ -85,12 +104,25 @@ let valid = rust_rapidsnark::groth16_verify_wrapper(
 
 -   aarch64-apple-ios
 -   aarch64-apple-ios-sim
--   x86_64-apple-ios
 
 ### Android
 
 -   aarch64-linux-android
 -   x86_64-linux-android
+
+Upstream publishes no x86_64 build of `libfr.a` and `libfq.a` for the iOS
+simulator, so `x86_64-apple-ios` needs libraries supplied through
+`RAPIDSNARK_LIB_DIR`. A target outside this list falls back to the generic build
+for its architecture, which may not link.
+
+## Build configuration
+
+-   `RAPIDSNARK_LIB_DIR` links `librapidsnark.a`, `libfr.a`, `libfq.a` and
+    `libgmp.a` out of a directory you provide and skips the download, which is
+    what you want for offline builds or locally compiled rapidsnark.
+-   `RAPIDSNARK_DOWNLOAD_BASE_URL` fetches the pinned release assets from a
+    mirror rather than from GitHub. The assets must be byte identical, since
+    each one is checked against a pinned sha256.
 
 ## Community
 
