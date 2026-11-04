@@ -5,6 +5,38 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.1) — QML routing fixes, verified live
+
+v1.3.0 shipped with the picker QML broken in three ways, all found by
+driving the real v1.3.0 .lgx inside Basecamp (Install Local Package →
+search → launch):
+
+1. **Op-name mismatch:** the core tags results with ITS op names
+   (`"op": "regions"`, `"op": "catalog"`), but the QML arms matched the
+   local dispatch tags (`"regions-list"`, `"catalog-list"`). With r.op
+   authoritative, those arms never ran — the picker list and the
+   hosted-set stayed empty. Arms now accept both names.
+2. **Catalog result shape:** the `catalog` op returns the records as a
+   BARE LIST under `result`, not `{catalog: [...]}` — the arm read
+   `r.result.catalog` (undefined on an array) and always took the
+   empty fallback. Handles both shapes now.
+3. **Startup sizes fetch dropped:** firing `sizes` from the discover
+   result while the slow catalog RPC was still in flight silently
+   dropped the op in the RemoteObjects transport (no result ever
+   arrived; core idle). The startup chain is now serialized — open →
+   discover → regions → catalog → sizes, each fired from the previous
+   result — and sizes fires with a drained queue. Clicking the REGIONS
+   chip re-runs the whole chain (verified as the manual recovery).
+   Plus a null guard on `ListView.view.count` in the Regions tab
+   delegate (a TypeError every frame otherwise).
+
+Live verification (Basecamp, both packages at 1.3.0/1.3.1, real
+catalog with 25 hosted regions): REGIONS 72/72; sizes auto-load (~7s,
+60.4 GB total); picker lists all regions with per-region sizes;
+selecting germany+france pins ×-chips and shows "Host selected
+(2 · 10.0 GB)", "Host all except selected (70 · 50.4 GB)", "Host all
+(47 new · 51.7 GB)" — every number checks out by arithmetic.
+
 ## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.0) — region picker + op-tagged results
 
 Two changes ship in 1.3.0:

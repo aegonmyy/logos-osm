@@ -113,34 +113,43 @@ Item {
 
     // Route a completed op's result. Consoles per tab; the two list-driving
     // ops (regions, lookup) also update the Regions tab's model.
+    //
+    // Ops arrive tagged by the core with the CORE's op name (r.op in the
+    // router), while locally-dispatched tags ("regions-list", "catalog-list")
+    // still apply for cores that predate op tagging — every arm accepts
+    // both. The startup chain is serialized (each op fired from the previous
+    // result) because firing an op while another is still in flight can
+    // silently drop it in the RemoteObjects transport.
     function onOpResult(op, r) {
         const consoleText = root.pretty(r)
 
         if (op === "open") {
-            if (r.ok) {
-                root.runDiscover()
-                root.call("regions", {}, "regions-list")
-                root.call("catalog", {}, "catalog-list")
-            }
-        } else if (op === "regions-list") {
+            if (r.ok) root.runDiscover()
+        } else if (op === "regions" || op === "regions-list") {
             if (r.ok && r.result && r.result.regions) {
                 root.regionList = r.result.regions.map(g => ({
                     path: g.path, name: g.name, level: g.level }))
             }
+            root.call("catalog", {}, "catalog-list")
         } else if (op === "sizes") {
             if (r.ok && r.result && r.result.sizes) root.regionSizes = r.result.sizes
             root.sizesLoading = false
-        } else if (op === "catalog-list") {
-            if (r.ok && r.result && r.result.catalog) {
-                root.hostedRegions = r.result.catalog.map(c => c.region)
+        } else if (op === "catalog" || op === "catalog-list") {
+            // The core returns the catalog as a bare list under "result";
+            // accept an object wrapper too in case that shape returns.
+            const cat = Array.isArray(r.result)
+                ? r.result
+                : (r.result && r.result.catalog) || null
+            if (r.ok && cat) {
+                root.hostedRegions = cat.map(c => c.region)
             } else {
                 root.hostedRegions = []
             }
+            // Sizes last: the queue is drained here, so the op cannot
+            // collide with the slow catalog RPC (see the header comment).
+            root.sizesLoading = true
+            root.call("sizes", {}, "sizes")
         } else if (op === "discover") {
-            if (r.ok) {
-                root.sizesLoading = true
-                root.call("sizes", {}, "sizes")
-            }
             if (r.ok && r.result) {
                 root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
                 root.regionsTotal = r.result.total_set !== undefined ? r.result.total_set : 72
@@ -150,12 +159,13 @@ Item {
                 root.discoverState = "error"
                 root.discoverError = r.error || "discover failed"
             }
+            if (r.ok) root.call("regions", {}, "regions-list")
         }
         if (root.currentTab === 0)      out.outputText  = consoleText
         else if (root.currentTab === 1) outR.outputText = consoleText
         else                            out2.outputText = consoleText
 
-        if (op === "regions") {
+        if (op === "regions" || op === "regions-list") {
             regionModel.clear()
             if (r.ok && r.result && r.result.regions) {
                 for (const g of r.result.regions) {
@@ -1146,7 +1156,7 @@ Item {
                                     anchors.right: parent.right
                                     height: 1
                                     color: root.cHairSoft
-                                    visible: index < ListView.view.count - 1
+                                    visible: !ListView.view || index < ListView.view.count - 1
                                 }
                                 MouseArea {
                                     id: rowMouse
