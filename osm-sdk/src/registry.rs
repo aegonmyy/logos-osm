@@ -219,6 +219,64 @@ pub async fn resolve_region(
     Ok(Some(entry))
 }
 
+/// Resolve many regions' on-chain entries concurrently — the bulk form of
+/// [`resolve_region`], shaped like [`crate::geofabrik::GeofabrikClient::sizes`]
+/// (8 requests in flight at a time, the jsonrpsee `HttpClient` cloned per job
+/// because it is cheap to clone).
+///
+/// One region's failed read does not abort the run: that region's result
+/// carries the error and the rest still resolve (a partial answer beats none —
+/// the same contract `sizes` has for HEAD requests). Output order follows the
+/// input order.
+pub async fn resolve_regions_bulk(
+    sequencer_url: &str,
+    program_account: &AccountId,
+    region_paths: &[&str],
+) -> anyhow::Result<Vec<(String, anyhow::Result<Option<RegionEntry>>)>> {
+    use futures::StreamExt as _;
+    use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
+
+    let client = SequencerClientBuilder::default()
+        .build(sequencer_url)
+        .map_err(|e| anyhow::anyhow!("sequencer {sequencer_url}: {e}"))?;
+    let prog = *program_account;
+    let mut out = futures::stream::iter(region_paths.iter().copied())
+        .map(|path| {
+            let client = client.clone();
+            async move {
+                let entry: anyhow::Result<Option<RegionEntry>> = async {
+                    let account = client
+                        .get_account(region_pda(&prog, path))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("reading {path} from the sequencer: {e}"))?;
+                    let shard = account.data.shard(prog);
+                    if shard.as_ref().is_empty() {
+                        return Ok(None);
+                    }
+                    Ok(Some(
+                        borsh::from_slice(shard.as_ref())
+                            .map_err(|e| anyhow::anyhow!("decoding {path}: {e}"))?,
+                    ))
+                }
+                .await;
+                (path.to_string(), entry)
+            }
+        })
+        .buffer_unordered(8)
+        .collect::<Vec<(String, anyhow::Result<Option<RegionEntry>>)>>()
+        .await;
+    // buffer_unordered loses input order; the statuses map is keyed by region
+    // so order is cosmetic, but a stable output is nicer to diff. Sort back
+    // into the requested order.
+    let rank: std::collections::HashMap<&str, usize> = region_paths
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (*p, i))
+        .collect();
+    out.sort_by_key(|(path, _)| rank.get(path.as_str()).copied().unwrap_or(usize::MAX));
+    Ok(out)
+}
+
 /// Decode a registry account's data bytes.
 pub fn decode_registry_state(bytes: &[u8]) -> anyhow::Result<RegistryState> {
     borsh::from_slice(bytes).map_err(|e| anyhow::anyhow!("decoding RegistryState: {e}"))
@@ -436,5 +494,21 @@ mod tests {
         assert_eq!(kids.len(), 8);
         assert!(kids.iter().all(|r| r.parent == Some("us")));
         assert!(children_of("narnia").is_empty());
+    }
+
+    #[tokio::test]
+    async fn bulk_resolve_reports_per_region_errors_offline() {
+        // An unreachable sequencer (nothing listens on 127.0.0.1:9) must not
+        // abort the bulk read: every region comes back carrying its own
+        // error, in the requested order (the sizes contract — a partial
+        // answer beats none).
+        let out = resolve_regions_bulk("http://127.0.0.1:9/", &prog(), &["germany", "france"])
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, "germany");
+        assert_eq!(out[1].0, "france");
+        assert!(out[0].1.is_err());
+        assert!(out[1].1.is_err());
     }
 }

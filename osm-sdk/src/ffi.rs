@@ -19,8 +19,9 @@
 //!
 //! Ops (see `dispatch`): `open`, `status`, `regions`, `discover`, `host`,
 //! `host_bulk`, `register`, `register_bulk`, `init`, `fetch`, `import`,
-//! `update`, `catalog`. Transactions come back as JSON for the wallet to
-//! submit — the FFI never signs or submits (same split as the CLI).
+//! `update`, `catalog`, `lookup`, `lookup_bulk`. Transactions come back as
+//! JSON for the wallet to submit — the FFI never signs or submits (same
+//! split as the CLI).
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -105,6 +106,11 @@ struct AppState {
     /// picker instantly and refresh in the background.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     region_sizes: std::collections::BTreeMap<String, u64>,
+    /// Last-known on-chain registration statuses (region -> status object,
+    /// the exact shape the `lookup_bulk` op returns). Cached so the Regions
+    /// tab renders instantly; `Re-check` refreshes it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    region_statuses: std::collections::BTreeMap<String, Value>,
     state_path: String,
 }
 
@@ -410,6 +416,7 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
         "import" => op_import(args),
         "update" => op_update(args),
         "lookup" => op_lookup(args),
+        "lookup_bulk" => op_lookup_bulk(args),
         "catalog" => with_state(args, |st| {
             Ok(client(st)
                 .catalog()
@@ -455,6 +462,7 @@ fn op_open(args: &Value) -> *mut c_char {
         sequencer_url: str_arg(args, "sequencer_url")
             .unwrap_or_else(|| "https://testnet.lez.logos.co".to_string()),
         region_sizes: std::collections::BTreeMap::new(),
+        region_statuses: std::collections::BTreeMap::new(),
         state_path: state_path.clone(),
     });
     // Refresh any provided config (lets the app re-point at live endpoints).
@@ -494,6 +502,9 @@ fn op_open(args: &Value) -> *mut c_char {
         // Cached region sizes so the app can render the picker before the
         // live `sizes` refresh completes (empty until the first fetch).
         "region_sizes": st.region_sizes,
+        // Cached on-chain registration statuses, same deal: the Regions tab
+        // renders badges from these before the first `lookup_bulk` refresh.
+        "region_statuses": st.region_statuses,
     });
     if let Err(e) = st.save() {
         return err(format!("{e:#}"));
@@ -948,6 +959,109 @@ fn op_lookup(args: &Value) -> *mut c_char {
     }))
 }
 
+/// Concurrently read the on-chain registration status for many regions —
+/// the bulk form of [`op_lookup`], shaped like [`op_sizes`] (optional comma
+/// `regions` subset, `"all"`/absent = the whole frozen set; 8 reads in
+/// flight). A region whose read fails keeps its `error` field instead of
+/// failing the whole op (a partial answer beats none).
+///
+/// Returns `{ statuses: { <region>: { registered, latest, cid, error? } },
+/// count, registered_count, error_count }` and MERGES the statuses into the
+/// session state (same merge semantics as the sizes cache: fetched entries
+/// update, the rest survive), so the next `open` serves them from disk.
+fn op_lookup_bulk(args: &Value) -> *mut c_char {
+    let wanted: Vec<String> = match str_arg(args, "regions") {
+        Some(spec) if spec != "all" => spec
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => REGIONS.iter().map(|r| r.path.to_string()).collect(),
+    };
+    let wanted: Vec<&str> = wanted.iter().map(String::as_str).collect();
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let program_account = match require_program_account(&st) {
+        Ok(a) => a,
+        Err(e) => return err(format!("{e:#}")),
+    };
+    let resolved = match block_on(crate::registry::resolve_regions_bulk(
+        &st.sequencer_url,
+        &program_account,
+        &wanted,
+    )) {
+        Ok(r) => r,
+        Err(e) => return err(format!("lookup_bulk: {e:#}")),
+    };
+    let mut statuses: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut registered_count = 0u64;
+    let mut error_count = 0u64;
+    for (region, res) in resolved {
+        let entry = match res {
+            // An on-chain entry exists: registered. (latest/cid come from the
+            // newest mirror; an entry with no mirrors is degenerate but
+            // honest to report as registered with no version.)
+            Ok(Some(e)) => {
+                registered_count += 1;
+                let latest = e.latest_mirror();
+                json!({
+                    "registered": true,
+                    "latest": latest.map(|m| m.version.to_string()),
+                    "cid": latest.map(|m| m.cid.clone()),
+                })
+            }
+            Ok(None) => json!({
+                "registered": false,
+                "latest": Value::Null,
+                "cid": Value::Null,
+            }),
+            Err(e) => {
+                error_count += 1;
+                json!({
+                    "registered": false,
+                    "latest": Value::Null,
+                    "cid": Value::Null,
+                    "error": format!("{e:#}"),
+                })
+            }
+        };
+        statuses.insert(region, entry);
+    }
+    let result = json!({
+        "statuses": statuses,
+        "count": statuses.len(),
+        "registered_count": registered_count,
+        "error_count": error_count,
+    });
+    // Persist the fresh statuses into the session state (MERGE, not
+    // replace — same contract as op_sizes: a subset call refreshes only the
+    // fetched regions, so the cache can only grow more current).
+    if let Some(mut st) = state_snapshot(args) {
+        let mut changed = false;
+        if let Value::Object(ref map) = result["statuses"] {
+            for (k, v) in map {
+                if st.region_statuses.insert(k.clone(), v.clone()) != Some(v.clone()) {
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            if let Err(e) = st.save() {
+                return err(format!("{e:#}"));
+            }
+            if let Some(sid) = resolve_session(args) {
+                let mut guard = SESSIONS.lock().unwrap();
+                if let Some(m) = guard.as_mut() {
+                    m.insert(sid, st);
+                }
+            }
+        }
+    }
+    ok(result)
+}
+
 /// Check whether a newer snapshot is published upstream.
 fn op_update(args: &Value) -> *mut c_char {
     let Some(region) = str_arg(args, "region") else {
@@ -1103,5 +1217,119 @@ mod tests {
         let a = account_from_hex(&hex_id).unwrap();
         assert_eq!(hex::encode(a.value()), hex_id);
         assert!(account_from_hex("0123").is_err());
+    }
+
+    /// `lookup_bulk` against an unreachable sequencer: the op still succeeds
+    /// (a partial answer beats none — the `sizes` contract), every region
+    /// carries its own error, the dispatch tags the result with the op name,
+    /// and the statuses MERGE into the cached state (a subset fetch keeps the
+    /// earlier entries). Runs on its own session so the parallel default-
+    /// session test cannot race it.
+    #[test]
+    fn ffi_lookup_bulk_shape_and_state_cache() {
+        let (state, cache) = fresh_state();
+        // Before open: the not-open error.
+        let r = invoke(
+            "lookup_bulk",
+            &json!({ "regions": "germany,france", "session": "bulk-test" }),
+        );
+        assert!(!r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
+        // Open with no program account recorded -> the op names what to set.
+        let r = invoke(
+            "open",
+            &json!({
+                "state_path": state, "cache_dir": cache, "memory": true,
+                "session": "bulk-test",
+            }),
+        );
+        assert!(
+            r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            "{r}"
+        );
+        let r = invoke(
+            "lookup_bulk",
+            &json!({ "regions": "germany", "session": "bulk-test" }),
+        );
+        assert!(!r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
+        assert!(
+            r["error"].as_str().unwrap().contains("program_account_hex"),
+            "{}",
+            r["error"]
+        );
+        // With a program account but an unreachable sequencer
+        // (127.0.0.1:9 — nothing listens): ok, per-region error statuses.
+        let r = invoke(
+            "open",
+            &json!({
+                "state_path": state, "cache_dir": cache, "memory": true,
+                "program_account_hex": PROGRAM_ACCOUNT_HEX,
+                "sequencer_url": "http://127.0.0.1:9/",
+                "session": "bulk-test",
+            }),
+        );
+        assert!(
+            r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            "{r}"
+        );
+        let r = invoke(
+            "lookup_bulk",
+            &json!({ "regions": "germany,france", "session": "bulk-test" }),
+        );
+        assert!(
+            r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            "{r}"
+        );
+        // dispatch() tags the result with the core op name.
+        assert_eq!(r["op"].as_str().unwrap(), "lookup_bulk");
+        let res = &r["result"];
+        assert_eq!(res["count"].as_u64(), Some(2));
+        assert_eq!(res["registered_count"].as_u64(), Some(0));
+        assert_eq!(res["error_count"].as_u64(), Some(2));
+        for region in ["germany", "france"] {
+            let s = &res["statuses"][region];
+            assert_eq!(s["registered"].as_bool(), Some(false), "{s}");
+            assert!(
+                s["error"].as_str().unwrap().contains(region),
+                "error should name the region: {s}"
+            );
+        }
+        // The statuses were cached: the next open returns them.
+        let r = invoke(
+            "open",
+            &json!({
+                "state_path": state, "cache_dir": cache, "memory": true,
+                "program_account_hex": PROGRAM_ACCOUNT_HEX,
+                "session": "bulk-test",
+            }),
+        );
+        assert!(
+            r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            "{r}"
+        );
+        assert_eq!(
+            r["result"]["region_statuses"]["germany"]["registered"].as_bool(),
+            Some(false)
+        );
+        // MERGE: a subset fetch (kenya) keeps the previously cached entries.
+        let r = invoke(
+            "lookup_bulk",
+            &json!({ "regions": "kenya", "session": "bulk-test" }),
+        );
+        assert!(
+            r.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            "{r}"
+        );
+        let r = invoke(
+            "open",
+            &json!({
+                "state_path": state, "cache_dir": cache, "memory": true,
+                "program_account_hex": PROGRAM_ACCOUNT_HEX,
+                "session": "bulk-test",
+            }),
+        );
+        let cached = r["result"]["region_statuses"].as_object().unwrap();
+        for region in ["germany", "france", "kenya"] {
+            assert!(cached.contains_key(region), "missing {region}: {cached:?}");
+        }
     }
 }

@@ -5,7 +5,101 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
-## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.3) — ongoing tasks, real host progress
+## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.4) — UX overhaul
+
+Five changes, one goal: the app explains itself and the registry answers
+in bulk. 1894 → 2496 lines of QML, one new core op.
+
+1. **The LEZ transactions section (Host §03) is gone from the app.**
+   Registration/init tx builders moved out of the UI — the wallet+CLI
+   flow owns them now (the new Guide tab's "Registering regions
+   on-chain" doc walks the CLI). QML-only: the `register` /
+   `register_bulk` / `init` FFI ops are untouched (the CLI depends on
+   them). The Host tab is Connect + Host + console; `txSelectedRegions`,
+   `toggleTxRegion`, the §03 picker, and the OWNER field all deleted
+   with no dangling references (identifier-checked). The REGISTRAR
+   field stays in Connect — Consumer §02's "Verify + store + register
+   tx" still reads it.
+2. **Connect-section UX.** Every `SectionHead` is now a toggle: a
+   `Section` component wraps header + body, chevron rotates ▸→▾, body
+   height animates 180 ms. Connect auto-collapses when the startup
+   auto-open succeeds (a failed startup open leaves it expanded —
+   verified with a fresh load in the headless harness); manual toggles
+   are plain property state. Fields got captions (visible while
+   empty/default), the REGISTRAR got live validation (64-hex → green
+   border + "✓ 64 hex characters"; wrong → amber + "needs 64 hex
+   characters") via a new `MonoField.validation` property, an ⓘ tooltip
+   (what a registrar is, why the app never sees keys), and the STORAGE
+   label got a reachability dot driven by every open result (green/red).
+   The CORE chip renders `✓ v1.3.4` (parsed from the version JSON) with
+   the raw JSON in its tooltip.
+3. **Regions tab: registered-first with badges (new core op
+   `lookup_bulk`).** Modeled on `sizes`: optional comma `regions`
+   subset ("all"/absent = the frozen 72), 8 reads in flight
+   (`registry::resolve_regions_bulk`, the jsonrpsee client cloned per
+   job — it is cheap to clone), per-region errors recorded in an
+   `error` field instead of failing the op, results
+   `{statuses, count, registered_count, error_count}` tagged with
+   `"op": "lookup_bulk"` by `dispatch`. Statuses MERGE into a new
+   `AppState.region_statuses` (BTreeMap<region, Value>, serde default +
+   skip-if-empty) exactly like the sizes cache, and `open` returns them
+   so the tab renders from the state file. QML: opening the tab
+   auto-fires `lookup_bulk` when the session has no statuses yet;
+   "Re-check" re-fires; rows show `◆ registered · v<latest>` in the
+   accent (muted `—` otherwise, "read failed" + tooltip with the error
+   when the chain read failed); registered sort first (stable by path
+   within groups); an All/Registered/Not registered filter row
+   re-derives the model. Click-a-row → full `lookup` → console is
+   unchanged. 2 new Rust tests (registry bulk shape + FFI
+   shape/cache/merge; 42 pass now).
+4. **Consumer tab: per-section pickers + auto-population.** Each of the
+   three sections got its OWN single-select picker — one shared
+   `RegionPickPopup` component (search + sizes list, the same popup the
+   Host picker uses, with a `singleSelect` mode that closes on pick);
+   the free-text REGION fields are gone; the pinned chip shows
+   `region · size` with × to clear. Picking a fetch region fires
+   `lookup`, routed in `onOpResult` and correlated by region (the core
+   tags every result `"lookup"`, so a pending flag + region match
+   guards against consuming a Regions-tab row-click result — verified:
+   a mismatched result is ignored): ok fills CID + MD5 with a "from
+   registry ✓" caption; "is not registered on chain" → "not on the
+   registry yet — nothing to fetch"; any other error → amber "registry
+   unreachable — enter manually" (fields stay editable). §02 import got
+   "use cached file" (fills the PBF path from the local catalog
+   record's `path` — `catalogRecords` now stores the full records; a
+   finished host run refires `catalog` so fresh regions appear). MD5
+   validates live (32 hex), CID gets a presence check.
+5. **Guide tab (4th tab): bundled markdown, rendered in-app.** Doc list
+   (220 px, left) + `Text { textFormat: Text.MarkdownText }` in a
+   ScrollView. **Rendering path: STRING CONSTANTS, not file reads.**
+   Two independent blockers, both verified: (a) Qt 6.10 QML
+   `XMLHttpRequest` refuses file: URLs by default ("Using GET on a
+   local file is disabled by default. Set QML_XHR_ALLOW_FILE_READ to
+   1" — reproduced locally with PySide6 6.10.2), and (b) Basecamp's
+   sandbox (logos-app `app/restricted/DenyAllNetworkAccessManager.cpp`,
+   wired per ui_qml view in `QmlSandbox.cpp`) returns a failing reply
+   for EVERY engine network request, file: included — so even with the
+   env var set, the packaged app cannot XHR a sibling .md. The docs
+   therefore live as markdown template-literals in
+   `app/src/qml/guide/GuideDocs.js` (a `.pragma library` inside the QML
+   dir, loaded through the type loader — the same channel that loads
+   fonts, which the sandbox allows for local files under the module's
+   qml root). Four docs: how-it-works (roles, trust triangle, what a
+   registrar is, why the wallet signs), hosting (Host tab walkthrough),
+   fetching (Consumer tab walkthrough), register-onchain (CLI:
+   prerequisites, the published-genesis-account faucet, deploy,
+   `osm init`, hosting, `osm register`/`register-bulk` ≤ 24 per tx,
+   `osm lookup`).
+
+Verification for this release (beyond cargo): the whole QML was loaded
+headlessly (PySide6, offscreen) against a mock `osm_app` replica and
+driven through the full startup chain, a `lookup_bulk` merge, all three
+fetch-fill outcomes, a mis-correlated lookup, all four guide docs, both
+open outcomes, and the region model's registered-first sort and
+All/Registered/Not filter counts. qmllint shows no new warning
+categories vs the pristine file (the two `missing-property` hits are
+the pre-existing ConsoleScrollBar `parent.pressed/hovered` pattern;
+`unqualified` grows with the file, which is that file's style).
 
 Long ops used to be invisible: a result only landed in the bottom output
 console, and `host_bulk` gave no feedback until every region finished. Four
