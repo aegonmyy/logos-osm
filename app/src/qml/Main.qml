@@ -49,6 +49,45 @@ Item {
     property int    regionsTotal: 72
     property string discoverError: ""
 
+    // Txns picker state (Host §03): the regions chosen for the register /
+    // register_bulk builders. Own selection state, same selection method as
+    // the §02 picker.
+    property var txSelectedRegions: []     // [path]
+
+    // ---- Ongoing tasks (the tasks panel) ---------------------------------
+    // Every call() registers a task; onOpResult resolves the oldest running
+    // task whose op matches the result. Completed tasks are pruned to the
+    // last ~8. Running rows tick off one shared 1 Hz counter (taskTick),
+    // not per-row Timers.
+    property var tasks: []            // [{id, op, label, args, startedAt, state, summary}]
+    property int taskSeq: 0
+    property int taskTick: 0          // 1 Hz heartbeat while anything runs
+    property int runningTasks: root.tasks.filter(t => t.state === "running").length
+    property int tasksErrorCount: root.tasks.filter(t => t.state === "error").length
+    property string tasksChipText: {
+        if (root.tasks.length === 0) return "idle"
+        const parts = []
+        if (root.runningTasks > 0) parts.push(root.runningTasks + " running")
+        const done = root.tasks.length - root.runningTasks - root.tasksErrorCount
+        if (done > 0) parts.push(done + " done")
+        if (root.tasksErrorCount > 0)
+            parts.push(root.tasksErrorCount + (root.tasksErrorCount > 1 ? " errors" : " error"))
+        return parts.length > 0 ? parts.join(" · ") : "idle"
+    }
+
+    // The sequential host-loop driver (startHostRun / hostNext /
+    // onHostResult): the three Host §02 buttons fire the single-region
+    // `host` op one at a time instead of one host_bulk, so progress shows
+    // per region. hostLoopActive also guards against a second run while one
+    // is in flight (the transport drops ops fired concurrently).
+    property bool hostLoopActive: false
+    property var hostQueue: []          // [path] still to host this run
+    property int hostTotal: 0           // queue length when the run started
+    property int hostDoneCount: 0
+    property int hostBytes: 0           // bytes stored so far this run
+    property string hostCurrent: ""     // region whose host op is in flight
+    property int hostTaskId: -1         // the grouped task's id
+
     // Auto-init: open the SDK session on startup; discover follows once the
     // session is up. The user never thinks about "Open" — the fields above
     // are applied automatically, and editing them re-fires on the next
@@ -94,10 +133,18 @@ Item {
         return t
     }
     function toggleRegion(path) {
-        const i = root.selectedRegions.indexOf(path)
-        if (i >= 0) root.selectedRegions.splice(i, 1)
-        else root.selectedRegions.push(path)
-        root.selectedRegions = root.selectedRegions.slice()
+        root.selectedRegions = root.toggleIn(root.selectedRegions, path)
+    }
+    function toggleTxRegion(path) {
+        root.txSelectedRegions = root.toggleIn(root.txSelectedRegions, path)
+    }
+    // Shared picker toggle: returns a fresh array, so reassigning the
+    // selection property notifies every binding that reads it.
+    function toggleIn(list, path) {
+        const i = list.indexOf(path)
+        if (i >= 0) list.splice(i, 1)
+        else list.push(path)
+        return list.slice()
     }
     Component.onCompleted: {
         root.call("open", root.openArgs())
@@ -106,10 +153,183 @@ Item {
     function call(op, args, tag) {
         if (!root.bk) return
         root.pendingOp = tag || op
-        root.bk.invokeOp(op, JSON.stringify(args || {}))
+        const a = args || {}
+        // Every fired op becomes a task the panel tracks to completion.
+        root.addTask(op, root.taskLabel(op, a), a)
+        root.bk.invokeOp(op, JSON.stringify(a))
     }
 
     function pretty(obj) { return JSON.stringify(obj, null, 2) }
+
+    // ---- Task bookkeeping ---------------------------------------------------
+    function addTask(op, label, args) {
+        const t = {
+            id: ++root.taskSeq,
+            op: op,             // core op name ("host-run" for the loop's group task)
+            label: label,
+            args: args || {},   // kept for summaries the result doesn't echo
+            startedAt: Date.now(),
+            state: "running",   // running | done | error
+            summary: ""
+        }
+        root.tasks = root.tasks.concat([t])
+        return t.id
+    }
+
+    function taskIndex(id) {
+        for (let i = 0; i < root.tasks.length; i++)
+            if (root.tasks[i].id === id) return i
+        return -1
+    }
+
+    // Patch one task: new object + array reassignment so the panel re-renders.
+    function updateTask(id, patch) {
+        const i = root.taskIndex(id)
+        if (i < 0) return
+        const arr = root.tasks.slice()
+        arr[i] = Object.assign({}, root.tasks[i], patch)
+        root.tasks = arr
+        if (patch.state !== undefined && patch.state !== "running") root.pruneTasks()
+    }
+
+    // Keep the last ~8 completed tasks (running ones always stay).
+    function pruneTasks() {
+        const completedAt = []
+        for (let i = 0; i < root.tasks.length; i++)
+            if (root.tasks[i].state !== "running") completedAt.push(i)
+        const excess = completedAt.length - 8
+        if (excess <= 0) return
+        const drop = completedAt.slice(0, excess)     // oldest completed first
+        root.tasks = root.tasks.filter((t, i) => drop.indexOf(i) < 0)
+    }
+
+    function fmtElapsed(startedAt) {
+        const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+        const m = Math.floor(s / 60)
+        const r = s % 60
+        return (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r
+    }
+
+    function taskLabel(op, args) {
+        const region = args && args.region ? args.region : ""
+        switch (op) {
+            case "host":     return region ? "host " + region : "host"
+            case "fetch":    return region ? "fetch " + region : "fetch"
+            case "import":   return region ? "import " + region : "import"
+            case "update":   return region ? "update " + region : "update"
+            case "lookup":   return region ? "lookup " + region : "lookup"
+            case "register": return region ? "register " + region : "register"
+            case "register_bulk": return "register batch"
+            case "host_bulk":     return "host bulk"
+            case "sizes": {
+                const n = root.regionList.length > 0 ? root.regionList.length : root.regionsTotal
+                return "sizes (" + n + " regions)"
+            }
+            default: return op
+        }
+    }
+
+    // One-line summary of a finished task; the row elides on overflow.
+    function taskSummary(op, r, t) {
+        const res = r.result || {}
+        switch (op) {
+            case "host":
+                return (res.region || "") + " · " + String(res.cid || "").substring(0, 10)
+                     + (res.bytes !== undefined ? "… · " + root.fmtBytes(res.bytes) : "")
+            case "sizes":
+                return (res.count !== undefined ? res.count : "?") + " regions · "
+                     + (res.total_bytes !== undefined ? root.fmtBytes(res.total_bytes) : "?")
+            case "fetch": {
+                const region = res.region || (t.args && t.args.region) || ""
+                const cid = (t.args && t.args.cid) || ""
+                return cid ? region + " · " + cid : region
+            }
+            default:
+                return "ok"
+        }
+    }
+
+    // A result landed: resolve the OLDEST running task whose core op matches
+    // the routed op (r.op when the core tags results, else the local
+    // pendingOp tag, normalized back to the core name).
+    function resolveTaskResult(op, r) {
+        let core = op
+        if (core === "regions-list") core = "regions"
+        else if (core === "catalog-list") core = "catalog"
+        else if (core.indexOf("lookup:") === 0) core = "lookup"
+        let idx = -1
+        for (let i = 0; i < root.tasks.length; i++) {
+            const t = root.tasks[i]
+            if (t.state === "running" && t.op === core) { idx = i; break }
+        }
+        if (idx < 0) return
+        const t = root.tasks[idx]
+        if (r.ok) {
+            root.updateTask(t.id, { state: "done", summary: root.taskSummary(core, r, t) })
+        } else {
+            root.updateTask(t.id, { state: "error", summary: r.error || "failed" })
+        }
+    }
+
+    // ---- The sequential host loop -------------------------------------------
+    // host_bulk reports nothing until every region finishes, so the Host §02
+    // buttons compute their region list exactly as their labels do and fire
+    // the single-region `host` op one at a time — strictly sequential (each
+    // next fires from the previous result; the RemoteObjects transport
+    // drops ops fired while another is in flight) — and every result ticks
+    // the grouped task. The core's host_bulk op is untouched (the CLI uses
+    // it); the loop IS the progress mechanism.
+    function startHostRun(regions) {
+        if (root.hostLoopActive || regions.length === 0) return
+        root.hostQueue = regions.slice()
+        root.hostTotal = regions.length
+        root.hostDoneCount = 0
+        root.hostBytes = 0
+        root.hostCurrent = ""
+        root.hostLoopActive = true
+        root.hostTaskId = root.addTask("host-run",
+            "host " + regions.length + (regions.length > 1 ? " regions" : " region"))
+        root.hostNext()
+    }
+
+    function hostNext() {
+        if (root.hostQueue.length === 0) return
+        root.hostCurrent = root.hostQueue[0]
+        root.hostQueue = root.hostQueue.slice(1)
+        root.call("host", { region: root.hostCurrent })
+    }
+
+    // Runs from onOpResult for op "host" while a run is active; the
+    // per-region task was already resolved by resolveTaskResult.
+    function onHostResult(r) {
+        if (!root.hostLoopActive) return
+        if (r.ok && r.result) {
+            root.hostDoneCount++
+            root.hostBytes += (r.result.bytes || 0)
+            root.updateTask(root.hostTaskId, {
+                summary: "hosting " + root.hostDoneCount + "/" + root.hostTotal
+                       + " · " + (r.result.region || root.hostCurrent) + " ✓ · "
+                       + root.fmtBytes(root.hostBytes) + " so far"
+            })
+            if (root.hostDoneCount >= root.hostTotal) {
+                root.hostLoopActive = false
+                root.updateTask(root.hostTaskId, {
+                    state: "done",
+                    summary: root.hostDoneCount + " hosted · " + root.fmtBytes(root.hostBytes)
+                })
+            } else {
+                root.hostNext()
+            }
+        } else {
+            // A region failed: stop the run here. The per-region task row
+            // carries the full error; the group carries region + message.
+            root.hostLoopActive = false
+            root.updateTask(root.hostTaskId, {
+                state: "error",
+                summary: root.hostCurrent + ": " + (r.error || "host failed")
+            })
+        }
+    }
 
     // Route a completed op's result. Consoles per tab; the two list-driving
     // ops (regions, lookup) also update the Regions tab's model.
@@ -125,6 +345,7 @@ Item {
     // error so the chain never strands) → catalog (the slow LEZ RPC,
     // last).
     function onOpResult(op, r) {
+        root.resolveTaskResult(op, r)
         const consoleText = root.pretty(r)
 
         if (op === "open") {
@@ -161,6 +382,9 @@ Item {
             } else {
                 root.hostedRegions = []
             }
+        } else if (op === "host") {
+            // The sequential host loop advances from this result.
+            root.onHostResult(r)
         } else if (op === "discover") {
             if (r.ok && r.result) {
                 root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
@@ -217,6 +441,15 @@ Item {
             // fall back to the pending tag for cores that predate that.
             root.onOpResult(r.op || root.pendingOp, r)
         }
+    }
+
+    // ONE shared 1 Hz timer drives every running task row's elapsed readout
+    // (cheap: it bumps a counter the elapsed bindings depend on).
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.runningTasks > 0
+        onTriggered: root.taskTick++
     }
 
     // ---- Logos identity tokens (from logos.co live CSS) ------------------
@@ -644,6 +877,185 @@ Item {
             }
         }
 
+        // ---- Ongoing tasks chip (opens the tasks panel) ----
+        // Sits below the CORE/REGIONS row, right-aligned, so it never
+        // overlaps them when closed; the panel opens upward from the chip
+        // (never over the tab bar below).
+        RowLayout {
+            Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            Rectangle {
+                id: tasksChip
+                objectName: "tasksChip"
+                Layout.alignment: Qt.AlignTop
+                radius: 4
+                color: Qt.rgba(0.961, 0.827, 0.157, 0.05)
+                border.width: 1
+                border.color: Qt.rgba(0.961, 0.827, 0.157, 0.30)
+                implicitHeight: tasksChipRow.implicitHeight + 14
+                implicitWidth: tasksChipRow.implicitWidth + 24
+                RowLayout {
+                    id: tasksChipRow
+                    anchors.centerIn: parent
+                    spacing: 10
+                    Text {
+                        text: "TASKS"
+                        font.family: root.fSans
+                        font.pixelSize: 11
+                        font.letterSpacing: 1.4
+                        font.weight: Font.Medium
+                        color: Qt.rgba(0.961, 0.827, 0.157, 0.75)
+                    }
+                    Text {
+                        text: "◐"
+                        font.pixelSize: 12
+                        color: root.runningTasks > 0 ? root.cAccent : root.cMuted
+                    }
+                    Text {
+                        text: root.tasksChipText
+                        font.family: root.fMono
+                        font.pixelSize: 11
+                        color: root.tasksErrorCount > 0 ? root.cBrown : root.cTan
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: tasksPanel.opened ? tasksPanel.close() : tasksPanel.open()
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: "Ongoing tasks — every op the app fires, with its result"
+                    hoverEnabled: true
+                }
+                Popup {
+                    id: tasksPanel
+                    x: tasksChip.width - width
+                    y: -(height + 8)
+                    width: 440
+                    height: 380
+                    padding: 1
+                    background: Rectangle {
+                        radius: 8
+                        color: root.cConsole
+                        border.width: 1
+                        border.color: root.cHair
+                    }
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 8
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Rectangle { width: 6; height: 6; radius: 3; color: root.cTeal }
+                            Text {
+                                text: "TASKS"
+                                font.family: root.fSans
+                                font.pixelSize: 11
+                                font.letterSpacing: 1.4
+                                font.weight: Font.Medium
+                                color: root.cMuted
+                            }
+                            Item { Layout.fillWidth: true }
+                            Text {
+                                text: root.tasks.length + " tracked"
+                                font.family: root.fSans
+                                font.pixelSize: 10
+                                color: root.cMuted
+                            }
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            ListView {
+                                id: taskList
+                                anchors.fill: parent
+                                clip: true
+                                ScrollBar.vertical: ConsoleScrollBar { }
+                                // newest first, so the running rows stay on top
+                                model: root.tasks.slice().reverse()
+                                delegate: Rectangle {
+                                    width: taskList.width
+                                    height: modelData.summary.length > 0 ? 52 : 36
+                                    color: taskMouse.containsMouse ? root.cPanelHi : "transparent"
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 10
+                                        anchors.topMargin: 7
+                                        anchors.bottomMargin: 7
+                                        spacing: 2
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 8
+                                            Text {
+                                                text: modelData.state === "running" ? "◐"
+                                                     : (modelData.state === "error" ? "✕" : "✓")
+                                                font.pixelSize: 12
+                                                color: modelData.state === "running" ? root.cAccent
+                                                     : (modelData.state === "error" ? root.cBrown : root.cTeal)
+                                            }
+                                            Text {
+                                                text: modelData.label
+                                                font.family: root.fSans
+                                                font.pixelSize: 12
+                                                color: modelData.state === "error" ? root.cTan : root.cInk
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                // Running rows tick: the shared 1s
+                                                // timer bumps taskTick, which this
+                                                // binding depends on.
+                                                text: {
+                                                    if (modelData.state !== "running") return ""
+                                                    root.taskTick
+                                                    return root.fmtElapsed(modelData.startedAt)
+                                                }
+                                                font.family: root.fMono
+                                                font.pixelSize: 11
+                                                color: root.cMuted
+                                            }
+                                        }
+                                        Text {
+                                            visible: modelData.summary.length > 0
+                                            text: modelData.summary
+                                            font.family: root.fMono
+                                            font.pixelSize: 11
+                                            color: modelData.state === "error" ? root.cBrown : root.cMuted
+                                            Layout.fillWidth: true
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    Rectangle {
+                                        anchors.bottom: parent.bottom
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        height: 1
+                                        color: root.cHairSoft
+                                        visible: index < taskList.count - 1
+                                    }
+                                    MouseArea {
+                                        id: taskMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                    }
+                                }
+                            }
+                            Text {
+                                visible: root.tasks.length === 0
+                                anchors.centerIn: parent
+                                text: "No tasks yet — every op the app fires\nshows up here with its result."
+                                horizontalAlignment: Text.AlignHCenter
+                                font.family: root.fSans
+                                font.pixelSize: 12
+                                color: root.cFaint
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Module error banner ----
         Rectangle {
             visible: root.lastErr.length > 0
@@ -925,13 +1337,16 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Actions + cumulative estimates.
+                    // Actions + cumulative estimates. Each fires the
+                    // sequential host loop (single-region `host` ops, one at
+                    // a time — see startHostRun) with exactly the region list
+                    // its label computes.
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
                         PButton {
                             Layout.alignment: Qt.AlignBottom
-                            enabled: root.selectedRegions.length > 0
+                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive
                             opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const sel = root.selectedRegions
@@ -939,12 +1354,11 @@ Item {
                                 return "Host selected  (" + sel.length + " · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
-                            onClicked: root.call("host_bulk",
-                                { regions: root.selectedRegions.join(",") })
+                            onClicked: root.startHostRun(root.selectedRegions)
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
-                            enabled: root.selectedRegions.length > 0
+                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive
                             opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const all = root.regionList.map(g => g.path)
@@ -953,13 +1367,14 @@ Item {
                                 return "Host all except selected  (" + keep.length +
                                        (bytes ? " · " + root.fmtBytes(bytes) : "") + ")"
                             }
-                            onClicked: root.call("host_bulk", {
-                                regions: "all",
-                                opt_out: root.selectedRegions.join(",")
-                            })
+                            onClicked: root.startHostRun(
+                                root.regionList.map(g => g.path)
+                                    .filter(p => root.selectedRegions.indexOf(p) < 0))
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
+                            enabled: !root.hostLoopActive
+                            opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const all = root.regionList.map(g => g.path)
                                 const todo = all.filter(p => root.hostedRegions.indexOf(p) < 0)
@@ -967,38 +1382,201 @@ Item {
                                 return "Host all  (" + todo.length + " new · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
-                            onClicked: root.call("host_bulk", {
-                                regions: "all",
-                                opt_out: root.hostedRegions.join(",")
-                            })
+                            onClicked: root.startHostRun(
+                                root.regionList.map(g => g.path)
+                                    .filter(p => root.hostedRegions.indexOf(p) < 0))
                         }
                     }
 
                     // -- On-chain tx builders (wallet submits) --
                     SectionHead { numeral: "03"; heading: "LEZ transactions (the wallet submits these)" }
+
+                    // Tx-region selection: the same method as the Host §02
+                    // picker (own selection state, chips + popup), replacing
+                    // the old free-text REGION field. "Register tx" takes the
+                    // single selected region; "Batch tx" takes them all.
+                    Flow {
+                        id: txChips
+                        Layout.fillWidth: true
+                        spacing: 6
+                        visible: root.txSelectedRegions.length > 0
+                        Repeater {
+                            model: root.txSelectedRegions
+                            delegate: Rectangle {
+                                radius: 4
+                                color: Qt.rgba(0.961, 0.961, 0.941, 0.08)
+                                border.width: 1
+                                border.color: root.cHair
+                                width: txChipRow.implicitWidth + 16
+                                height: 26
+                                RowLayout {
+                                    id: txChipRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+                                    Text {
+                                        text: modelData
+                                        font.family: root.fMono
+                                        font.pixelSize: 11
+                                        color: root.cTan
+                                    }
+                                    Text {
+                                        text: "×"
+                                        font.family: root.fSans
+                                        font.pixelSize: 13
+                                        color: root.cMuted
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.toggleTxRegion(modelData)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
-                        FieldCell {
-                            label: "REGION"
-                            MonoField { id: txRegion; placeholderText: "region" }
+
+                        // The txns picker button + popup (same construction as
+                        // the §02 region picker).
+                        SButton {
+                            Layout.alignment: Qt.AlignBottom
+                            text: (root.txSelectedRegions.length === 0)
+                                  ? (root.sizesLoading ? "Select regions  (sizes loading…)" : "Select regions ▾")
+                                  : (root.txSelectedRegions.length + " selected ▾")
+                            onClicked: txRegionPicker.open()
+                            Popup {
+                                id: txRegionPicker
+                                x: 0
+                                y: -(height + 8)
+                                width: 520
+                                height: 400
+                                padding: 1
+                                background: Rectangle {
+                                    radius: 8
+                                    color: root.cConsole
+                                    border.width: 1
+                                    border.color: root.cHair
+                                }
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        TextField {
+                                            id: txPickerSearch
+                                            Layout.fillWidth: true
+                                            placeholderText: "filter…"
+                                            font.family: root.fMono
+                                            font.pixelSize: 11
+                                            color: root.cInk
+                                            background: Rectangle {
+                                                radius: 4
+                                                color: Qt.rgba(0,0,0,0.25)
+                                                border.width: 1
+                                                border.color: root.cHair
+                                            }
+                                            onTextChanged: txPickerModel.update()
+                                        }
+                                        Text {
+                                            text: root.sizesLoading ? "sizes…" : root.regionList.length + " regions"
+                                            font.family: root.fSans
+                                            font.pixelSize: 10
+                                            color: root.cMuted
+                                        }
+                                    }
+                                    ListView {
+                                        id: txPickerList
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        clip: true
+                                        ScrollBar.vertical: ConsoleScrollBar { }
+                                        model: ListModel { id: txPickerModel
+                                            function update() {
+                                                clear()
+                                                const needle = (txPickerSearch.text || "").toLowerCase()
+                                                for (const g of root.regionList) {
+                                                    if (needle.length === 0
+                                                        || g.path.toLowerCase().indexOf(needle) >= 0
+                                                        || (g.name||"").toLowerCase().indexOf(needle) >= 0) {
+                                                        append({ path: g.path, name: g.name, level: g.level })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        delegate: Rectangle {
+                                            width: txPickerList.width
+                                            height: 34
+                                            color: txPickerMouse.containsMouse ? root.cPanelHi : "transparent"
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 10
+                                                anchors.rightMargin: 10
+                                                spacing: 8
+                                                Text {
+                                                    text: root.txSelectedRegions.indexOf(model.path) >= 0 ? "×" : "·"
+                                                    color: root.txSelectedRegions.indexOf(model.path) >= 0 ? root.cAccent : root.cMuted
+                                                    font.pixelSize: 13
+                                                }
+                                                Text {
+                                                    text: model.path
+                                                    font.family: root.fMono
+                                                    font.pixelSize: 11
+                                                    color: root.cInk
+                                                    Layout.fillWidth: true
+                                                    elide: Text.ElideRight
+                                                }
+                                                Text {
+                                                    text: root.regionSizes[model.path] !== undefined
+                                                          ? root.fmtBytes(root.regionSizes[model.path]) : ""
+                                                    font.family: root.fMono
+                                                    font.pixelSize: 10
+                                                    color: root.cMuted
+                                                }
+                                            }
+                                            MouseArea {
+                                                id: txPickerMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.toggleTxRegion(model.path)
+                                            }
+                                        }
+                                        Connections {
+                                            target: root
+                                            function onRegionListChanged() { txPickerModel.update() }
+                                            function onRegionSizesChanged() { txPickerModel.update() }
+                                        }
+                                        Component.onCompleted: txPickerModel.update()
+                                    }
+                                }
+                            }
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
+                            enabled: root.txSelectedRegions.length === 1
+                            opacity: enabled ? 1.0 : 0.4
                             text: "Register tx"
                             onClicked: root.call("register", {
-                                region: txRegion.text.trim(),
+                                region: root.txSelectedRegions[0],
                                 registrar_hex: registrar.text
                             })
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
+                            enabled: root.txSelectedRegions.length > 0
+                            opacity: enabled ? 1.0 : 0.4
                             text: "Batch tx (region,cid pairs via catalog)"
                             onClicked: root.call("register_bulk", {
-                                regions: txRegion.text.trim(),
+                                regions: root.txSelectedRegions.join(","),
                                 registrar_hex: registrar.text
                             })
                         }
+                        Item { Layout.fillWidth: true }
                     }
                     RowLayout {
                         Layout.fillWidth: true

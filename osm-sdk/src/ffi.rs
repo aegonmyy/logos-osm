@@ -619,12 +619,19 @@ fn op_sizes(args: &Value) -> *mut c_char {
         sizes.iter().map(|(id, n)| (id.as_str(), *n)).collect();
     // Persist the fresh sizes into the session state so the next `open`
     // returns them (the app renders the picker from the cache instantly and
-    // lets this live fetch refresh it). Skipped when nothing changed.
+    // lets this live fetch refresh it). MERGE, not replace: a subset call
+    // (`regions: "a,b"`) refreshes only those entries — the rest of the
+    // cached map survives, so a subset fetch can no longer shrink the cache
+    // (the picker kept losing sizes it already had). Skipped when nothing
+    // changed.
     if let Some(mut st) = state_snapshot(args) {
-        let fresh: std::collections::BTreeMap<String, u64> =
-            map.iter().map(|(k, v)| (k.to_string(), *v)).collect();
-        if st.region_sizes != fresh {
-            st.region_sizes = fresh;
+        let mut changed = false;
+        for (k, v) in map.iter().map(|(k, v)| (k.to_string(), *v)) {
+            if st.region_sizes.insert(k, v) != Some(v) {
+                changed = true;
+            }
+        }
+        if changed {
             if let Err(e) = st.save() {
                 return err(format!("{e:#}"));
             }

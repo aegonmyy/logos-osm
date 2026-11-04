@@ -5,6 +5,53 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.3) — ongoing tasks, real host progress
+
+Long ops used to be invisible: a result only landed in the bottom output
+console, and `host_bulk` gave no feedback until every region finished. Four
+changes, one goal — you can now see what the app is doing:
+
+1. **Ongoing-tasks panel.** Every `root.call()` registers a task
+   (`{op, label, startedAt, state, summary}`); `onOpResult` resolves the
+   OLDEST running task matching the routed op (r.op first, pendingOp tag
+   normalized back to the core name for pre-tagging cores). A chip below
+   the header's CORE/REGIONS row ("TASKS ◐ 1 running · 2 done") opens a
+   popup listing them — glyph, label, ticking mm:ss elapsed for running
+   rows (ONE shared 1 Hz Timer bumps `taskTick`, which the elapsed
+   bindings depend on), and a one-line summary (host: region + first 10
+   CID chars + bytes; sizes: "N regions · X GB"; fetch: region + CID from
+   the call args; others "ok"; errors keep the message, elided). Last ~8
+   completed tasks are kept, oldest pruned.
+2. **Real host progress — client-side, no core change.** The three Host
+   §02 buttons compute their region list exactly as their labels do
+   (selected / all-except-selected / all-except-hosted) and fire the
+   single-region `host` op ONE AT A TIME through a small driver
+   (`startHostRun` / `hostNext` / `onHostResult`): each result ticks a
+   grouped task ("hosting 3/10 · bulgaria ✓ · 674 MB so far") and fires
+   the next; a region error stops the loop and marks the group error with
+   region + message. Strictly sequential like the startup chain — the
+   RemoteObjects transport drops ops fired while another is in flight
+   (which is also why the buttons disable while a run is active). The
+   server-side `host_bulk` FFI op is untouched (the CLI uses it); the
+   loop IS the progress channel — the C++ glue only surfaces a result
+   when the op returns, so mid-op emissions can never reach QML.
+3. **LEZ transactions picker.** Section 03's free-text REGION field is
+   replaced by the same selection method as §02: own selection state
+   (`txSelectedRegions` + generalized `toggleIn`), ×-chips, "Select
+   regions ▾" button + popup. "Register tx" passes the single selected
+   region (disabled unless exactly one); "Batch tx" passes all selected
+   joined by commas; `registrar_hex` wiring unchanged.
+4. **Sizes cache MERGE fix (Rust, op_sizes).** The `sizes` op used to
+   REPLACE `AppState.region_sizes` with whatever the fetch returned — a
+   subset call (`regions: "denmark"`) shrank the cache to one entry and
+   the picker lost every other region's size on the next `open`. It now
+   MERGES: only the fetched entries update, the rest survive, with the
+   "only save if anything changed" guard kept (insert returns the old
+   value; changed iff absent or different). Verified via ctypes against
+   the real state file: open → sizes{denmark} → open keeps both the
+   pre-existing entries and denmark; a fresh-region fetch (germany)
+   writes the new entry while the old ones survive.
+
 ## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.2) — sizes load faster
 
 Three changes, one goal: the region picker's sizes show as early as
