@@ -5,6 +5,31 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.2) — sizes load faster
+
+Three changes, one goal: the region picker's sizes show as early as
+possible on startup.
+
+1. **Sizes are cached in the state file.** The `sizes` op persists its
+   result into `AppState.region_sizes` (`osm-sdk/src/ffi.rs`, a
+   `BTreeMap<String, u64>` with `serde(default)` so old state files load
+   fine) and `open` returns it in its result summary. The QML seeds the
+   picker from that cache the moment `open` completes, so after the
+   first-ever fetch the sizes are instant on every startup; the live
+   `sizes` refresh then updates them in the background.
+2. **The startup chain reordered: sizes before catalog.** The chain is
+   open (seeds cached sizes) → discover → regions → sizes → catalog —
+   sizes no longer waits behind the slow LEZ catalog RPC (5–15 s on
+   testnet). The `sizes` arm fires catalog unconditionally (ok or
+   error), so a failed sizes op never strands the chain; a sizes op
+   dropped in transport is still recovered by the REGIONS chip, same as
+   v1.3.1. Serialization (each op fired from the previous result) is
+   unchanged — the RemoteObjects transport drops ops fired while
+   another is in flight.
+3. **24-way HEAD concurrency.** `geofabrik.sizes()` runs its HEAD
+   requests `.buffer_unordered(24)` (was 8), so the live refresh of all
+   72 regions lands proportionally sooner.
+
 ## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.1) — QML routing fixes, verified live
 
 v1.3.0 shipped with the picker QML broken in three ways, all found by

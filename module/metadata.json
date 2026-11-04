@@ -1,6 +1,6 @@
 {
   "name": "osm",
-  "version": "1.3.0",
+  "version": "1.3.2",
   "description": "OpenStreetMap distribution core: Geofabrik discovery, MD5-verified hosting to Logos Storage, and the LEZ region-registry client.",
   "type": "core",
   "interface": "universal",

@@ -339,7 +339,7 @@ impl GeofabrikClient {
                     n.map(|n| (id, n))
                 }
             })
-            .buffer_unordered(8)
+            .buffer_unordered(24)
             .filter_map(|r| async { r })
             .collect::<Vec<(String, u64)>>()
             .await;

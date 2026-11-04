@@ -101,6 +101,10 @@ struct AppState {
     program_account_hex: String,
     /// LEZ sequencer JSON-RPC endpoint, read by the `lookup` op.
     sequencer_url: String,
+    /// Last-known region PBF sizes (bytes). Cached so the app can render the
+    /// picker instantly and refresh in the background.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    region_sizes: std::collections::BTreeMap<String, u64>,
     state_path: String,
 }
 
@@ -450,6 +454,7 @@ fn op_open(args: &Value) -> *mut c_char {
         program_account_hex: String::new(),
         sequencer_url: str_arg(args, "sequencer_url")
             .unwrap_or_else(|| "https://testnet.lez.logos.co".to_string()),
+        region_sizes: std::collections::BTreeMap::new(),
         state_path: state_path.clone(),
     });
     // Refresh any provided config (lets the app re-point at live endpoints).
@@ -486,6 +491,9 @@ fn op_open(args: &Value) -> *mut c_char {
         "memory_storage": st.memory,
         "program_account_hex": st.program_account_hex,
         "catalog": client(&st).catalog().len(),
+        // Cached region sizes so the app can render the picker before the
+        // live `sizes` refresh completes (empty until the first fetch).
+        "region_sizes": st.region_sizes,
     });
     if let Err(e) = st.save() {
         return err(format!("{e:#}"));
@@ -609,6 +617,25 @@ fn op_sizes(args: &Value) -> *mut c_char {
         .collect();
     let map: std::collections::BTreeMap<&str, u64> =
         sizes.iter().map(|(id, n)| (id.as_str(), *n)).collect();
+    // Persist the fresh sizes into the session state so the next `open`
+    // returns them (the app renders the picker from the cache instantly and
+    // lets this live fetch refresh it). Skipped when nothing changed.
+    if let Some(mut st) = state_snapshot(args) {
+        let fresh: std::collections::BTreeMap<String, u64> =
+            map.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        if st.region_sizes != fresh {
+            st.region_sizes = fresh;
+            if let Err(e) = st.save() {
+                return err(format!("{e:#}"));
+            }
+            if let Some(sid) = resolve_session(args) {
+                let mut guard = SESSIONS.lock().unwrap();
+                if let Some(m) = guard.as_mut() {
+                    m.insert(sid, st);
+                }
+            }
+        }
+    }
     ok(json!({
         "sizes": map,
         "count": map.len(),

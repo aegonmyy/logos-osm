@@ -119,21 +119,37 @@ Item {
     // still apply for cores that predate op tagging — every arm accepts
     // both. The startup chain is serialized (each op fired from the previous
     // result) because firing an op while another is still in flight can
-    // silently drop it in the RemoteObjects transport.
+    // silently drop it in the RemoteObjects transport. Order (v1.3.2):
+    // open (seeds the picker from sizes cached in the state file) →
+    // discover → regions → sizes (live refresh; fires catalog even on
+    // error so the chain never strands) → catalog (the slow LEZ RPC,
+    // last).
     function onOpResult(op, r) {
         const consoleText = root.pretty(r)
 
         if (op === "open") {
-            if (r.ok) root.runDiscover()
+            if (r.ok) {
+                // Seed the picker from the sizes cached in the state file so
+                // it renders before the live `sizes` refresh lands.
+                if (r.result && r.result.region_sizes) root.regionSizes = r.result.region_sizes
+                root.runDiscover()
+            }
         } else if (op === "regions" || op === "regions-list") {
             if (r.ok && r.result && r.result.regions) {
                 root.regionList = r.result.regions.map(g => ({
                     path: g.path, name: g.name, level: g.level }))
             }
-            root.call("catalog", {}, "catalog-list")
+            // Sizes here (not the catalog): the picker gets live numbers
+            // before the slow LEZ catalog RPC runs at the end of the chain.
+            root.sizesLoading = true
+            root.call("sizes", {}, "sizes")
         } else if (op === "sizes") {
             if (r.ok && r.result && r.result.sizes) root.regionSizes = r.result.sizes
             root.sizesLoading = false
+            // Catalog fires unconditionally (ok or not) so a failed sizes
+            // op never strands the chain; if sizes is dropped in transport
+            // the REGIONS chip refresh recovers the whole chain.
+            root.call("catalog", {}, "catalog-list")
         } else if (op === "catalog" || op === "catalog-list") {
             // The core returns the catalog as a bare list under "result";
             // accept an object wrapper too in case that shape returns.
@@ -145,10 +161,6 @@ Item {
             } else {
                 root.hostedRegions = []
             }
-            // Sizes last: the queue is drained here, so the op cannot
-            // collide with the slow catalog RPC (see the header comment).
-            root.sizesLoading = true
-            root.call("sizes", {}, "sizes")
         } else if (op === "discover") {
             if (r.ok && r.result) {
                 root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
