@@ -202,7 +202,14 @@ fn client(st: &AppState) -> OsmClient<AnyStorage> {
 /// host process's CWD. When the env var is unset (standalone CLI/tests), the
 /// original CWD-relative defaults apply so behavior is unchanged outside Logos.
 fn user_dir_base() -> Option<PathBuf> {
-    std::env::var_os("LOGOS_USER_DIR").map(PathBuf::from)
+    if let Some(v) = std::env::var_os("LOGOS_USER_DIR") {
+        return Some(PathBuf::from(v));
+    }
+    // Portable fallback when the host sets no data dir: a stable per-user
+    // location instead of the process CWD (which a module host does not
+    // keep stable). HOME covers unix, USERPROFILE covers Windows.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".logos-osm"))
 }
 
 /// Resolve a path argument: explicit value wins, else `LOGOS_USER_DIR/<file>`,
@@ -342,7 +349,26 @@ pub unsafe extern "C" fn logos_osm_invoke(
     dispatch(&name, &args)
 }
 
+/// Dispatch an op and tag the result JSON with the op name. Results are
+/// delivered asynchronously (the host copies the return value into the
+/// `lastResult` property), so a UI driving several ops at once cannot tell
+/// which result belongs to which call. Embedding `"op"` in the payload makes
+/// routing reliable regardless of completion order.
 fn dispatch(name: &str, args: &Value) -> *mut c_char {
+    let raw = dispatch_op(name, args);
+    // SAFETY: `raw` was created by `CString::into_raw` in `to_json`/`err` and
+    // is not null (to_json always returns a valid pointer).
+    let owned = unsafe { CString::from_raw(raw) };
+    let parsed: Value = serde_json::from_str(owned.to_str().unwrap_or("{}"))
+        .unwrap_or_else(|_| json!({"ok": false, "error": "unparseable core result"}));
+    let mut tagged = parsed;
+    if let Value::Object(ref mut map) = tagged {
+        map.entry("op").or_insert(json!(name));
+    }
+    to_json(tagged)
+}
+
+fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
     match name {
         "version" => to_json(json!({
             "ok": true,
@@ -369,6 +395,7 @@ fn dispatch(name: &str, args: &Value) -> *mut c_char {
                 .collect();
             ok(json!({ "regions": out, "count": out.len() }))
         }
+        "sizes" => op_sizes(args),
         "discover" => op_discover(args),
         "host" => op_host(args),
         "host_bulk" => op_host_bulk(args),
@@ -547,6 +574,47 @@ fn op_host(args: &Value) -> *mut c_char {
         "md5": hex::encode(snap.checksum),
         "path": snap.path.display().to_string(),
         "tx": tx,
+    }))
+}
+
+/// Live extract sizes (HEAD Content-Length per region), for the app's
+/// region picker and cumulative hosting estimates. Takes an optional
+/// comma-separated `regions` subset (default: the whole frozen set) and
+/// uses the session's Geofabrik base when open, the default otherwise.
+fn op_sizes(args: &Value) -> *mut c_char {
+    let wanted: Vec<String> = match str_arg(args, "regions") {
+        Some(spec) if spec != "all" => spec
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => REGIONS.iter().map(|r| r.path.to_string()).collect(),
+    };
+    let wanted: Vec<&str> = wanted.iter().map(String::as_str).collect();
+    let base = state_snapshot(args)
+        .map(|st| st.geofabrik_url)
+        .unwrap_or_else(|| crate::geofabrik::DEFAULT_BASE.to_string());
+    let g = crate::geofabrik::GeofabrikClient::with_base(&base);
+    let sizes = match block_on(g.sizes(&wanted)) {
+        Ok(s) => s,
+        Err(e) => return err(format!("sizes: {e:#}")),
+    };
+    let total: u64 = sizes.iter().map(|(_, n)| *n).sum();
+    let have: Vec<&str> = sizes.iter().map(|(id, _)| id.as_str()).collect();
+    let missing: Vec<&str> = wanted
+        .iter()
+        .filter(|r| !have.contains(r))
+        .copied()
+        .collect();
+    let map: std::collections::BTreeMap<&str, u64> =
+        sizes.iter().map(|(id, n)| (id.as_str(), *n)).collect();
+    ok(json!({
+        "sizes": map,
+        "count": map.len(),
+        "requested": wanted.len(),
+        "missing": missing,
+        "total_bytes": total,
     }))
 }
 

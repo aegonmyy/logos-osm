@@ -80,6 +80,21 @@ struct RawUrls {
     pbf: Option<String>,
 }
 
+/// HEAD a URL and return its Content-Length, retrying once. Missing or
+/// unparsable header, or a failed request: `None`.
+async fn head_content_length(http: &reqwest::Client, url: &str) -> Option<u64> {
+    for _ in 0..2 {
+        if let Ok(resp) = http.head(url).send().await {
+            if let Some(v) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+                if let Some(n) = v.to_str().ok().and_then(|s| s.parse::<u64>().ok()) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parse an `index-v1-nogeom.json` document (or the same shape with
 /// geometry stripped) into [`IndexEntry`]s. Tolerant: unknown fields and
 /// missing URLs are skipped.
@@ -297,6 +312,38 @@ impl GeofabrikClient {
             region.path
         );
         Ok(file)
+    }
+
+    /// Live byte sizes of the given regions' extracts, via HEAD
+    /// Content-Length against the (possibly mirrored) PBF URLs. A region
+    /// whose size the server does not report, or whose HEAD fails, is
+    /// skipped rather than erroring: the caller gets what the server would
+    /// say today, and a partial answer beats none. Used by the app's
+    /// region picker ("bulgaria — 176.7 MB") and the cumulative hosting
+    /// estimates.
+    pub async fn sizes(&self, regions: &[&str]) -> Result<Vec<(String, u64)>> {
+        let jobs: Vec<(String, String)> = regions
+            .iter()
+            .filter_map(|id| {
+                crate::regions::REGIONS
+                    .iter()
+                    .find(|r| r.path == *id)
+                    .map(|r| ((*id).to_string(), self.mirror(&r.source_url())))
+            })
+            .collect();
+        let out = futures::stream::iter(jobs)
+            .map(|(id, url)| {
+                let http = self.http.clone();
+                async move {
+                    let n = head_content_length(&http, &url).await;
+                    n.map(|n| (id, n))
+                }
+            })
+            .buffer_unordered(8)
+            .filter_map(|r| async { r })
+            .collect::<Vec<(String, u64)>>()
+            .await;
+        Ok(out)
     }
 
     /// Streaming download of the region's PBF into `dest`.

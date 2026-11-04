@@ -39,26 +39,46 @@ if ! command -v x86_64-w64-mingw32-g++-posix >/dev/null; then
   sudo apt-get install -y -q mingw-w64
 fi
 
-# 2. rapidsnark windows statics (Logos fork release).
+# 2. rapidsnark windows statics (Logos fork release). The tarball extracts
+# NESTED (rapidsnark-windows-x86_64-<ver>/...); flatten it so the statics
+# land where RAPIDSNARK_LIB_DIR expects them ($RSN_DIR/lib/). Both the
+# download and the flatten are idempotent — a re-extracted tarball restores
+# the nested layout and gets re-flattened.
 RSN_DIR="$WORK/rapidsnark-win"
-if [ ! -f "$RSN_DIR/lib/librapidsnark.a" ]; then
+if [ ! -f "$RSN_DIR/lib/librapidsnark.a" ] && [ ! -d "$RSN_DIR/rapidsnark-windows-x86_64-v0.0.8-logos.1-rc.4" ]; then
   mkdir -p "$RSN_DIR"
   curl -sL -o "$RSN_DIR/rs.tar.gz" \
     "https://github.com/logos-blockchain/logos-blockchain-rapidsnark/releases/download/v0.0.8-logos.1-rc.4/rapidsnark-windows-x86_64-v0.0.8-logos.1-rc.4.tar.gz"
   tar xzf "$RSN_DIR/rs.tar.gz" -C "$RSN_DIR"
 fi
+if [ ! -f "$RSN_DIR/lib/librapidsnark.a" ] && ls "$RSN_DIR"/rapidsnark-windows-x86_64-*/lib/librapidsnark.a >/dev/null 2>&1; then
+  cp -r "$RSN_DIR"/rapidsnark-windows-x86_64-*/. "$RSN_DIR/"
+  rm -rf "$RSN_DIR"/rapidsnark-windows-x86_64-*
+fi
 
-# 3. logos-blockchain-circuits windows artifact (.lib -> lib*.a renames).
+# 2b. gcc/cargo temp files: keep them off any small tmpfs (/tmp here is a
+# 7.6G tmpfs with a user quota; assembler temps blew it on 2026-11-04).
+# $WORK defaults under /tmp, so point TMPDIR at the repo's target dir which
+# lives on the big disk.
+export TMPDIR="$PWD/target/gcc-tmp"
+mkdir -p "$TMPDIR"
+
+# 3. logos-blockchain-circuits windows artifact. mingw's -l flags need
+# lib<name>.a; the tarball ships <circuit>.lib. The rename runs outside the
+# download branch on purpose: a re-extracted tarball restores the .lib
+# names and must be re-renamed.
 LBC_DIR="$WORK/lbc-root/logos-blockchain-circuits-v0.5.3-windows-x86_64"
 if [ ! -f "$LBC_DIR/lib/libgmp.a" ]; then
   mkdir -p "$WORK/lbc-root"
   curl -sL -o "$WORK/lbc.tar.gz" \
     "https://github.com/logos-blockchain/logos-blockchain-circuits/releases/download/v0.5.3/logos-blockchain-circuits-v0.5.3-windows-x86_64.tar.gz"
   tar xzf "$WORK/lbc.tar.gz" -C "$WORK/lbc-root"
-  for c in pol poq poc signature; do
-    if [ -f "$LBC_DIR/$c/$c.lib" ]; then mv "$LBC_DIR/$c/$c.lib" "$LBC_DIR/$c/lib$c.a"; fi
-  done
 fi
+for c in pol poq poc signature; do
+  if [ -f "$LBC_DIR/$c/$c.lib" ] && [ ! -f "$LBC_DIR/$c/lib$c.a" ]; then
+    mv "$LBC_DIR/$c/$c.lib" "$LBC_DIR/$c/lib$c.a"
+  fi
+done
 
 # 3b. mcfgthread runtime: the Logos fork's windows static rapidsnark is
 # built against the mcfgthread threading runtime, whose _MCF_* symbols are

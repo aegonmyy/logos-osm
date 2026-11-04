@@ -5,6 +5,40 @@
 > everything after the historical marker describes the pre-port state and is
 > kept for context only, including rules that no longer apply.
 
+## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.0) — region picker + op-tagged results
+
+Two changes ship in 1.3.0:
+
+1. **`sizes` op + the region picker UI.** `geofabrik.sizes()` HEADs each
+   region PBF (8-way concurrent, follows the `-latest`→dated redirect) and
+   the FFI exposes it as `sizes` (optional comma `regions` subset or all).
+   The app's Host §02 became a picker: "Select regions ▾" opens a popup
+   with search + per-region sizes; selected regions pin as ×-chips; three
+   actions — host selected, host all except selected, and host-all-except-
+   what-you-have (opt_out from the catalog) — each with cumulative size
+   estimates.
+2. **Results are op-tagged.** The dynamic-replica result channel is ONE
+   `lastResult` property: with several ops in flight (the startup chain
+   fires open→discover→regions→catalog→sizes), results were attributed by
+   a single `pendingOp` slot and misrouted — the REGIONS chip hung on
+   "checking…" forever. Now every FFI result embeds `"op": <name>`
+   (`dispatch` wraps `dispatch_op` in osm-sdk/src/ffi.rs) and the QML
+   routes by `r.op`. Pre-tagging cores fall back to `pendingOp`.
+
+QML fixes in the same version: output box is a real ScrollView (the bare
+`ScrollBar.vertical` on a TextArea silently didn't attach — the box never
+scrolled); `ToolTip.visible: hovered` → `containsMouse` (two ReferenceErrors
+per render); "Host all except selected" shows its region count.
+
+**Windows build gotchas that cost hours (all now encoded in
+scripts/build-windows-cdylib.sh):** the rapidsnark tarball extracts NESTED
+and must be flattened into `$RSN_DIR/lib`; the circuits `.lib→lib*.a`
+renames must run OUTSIDE the download branch (a re-extracted tarball
+restores `.lib` names); gcc temp files go to TMPDIR — point it at the big
+disk, not a small tmpfs (a 7.6G tmpfs quota produced "error writing to
+/tmp/cc*.s: Disk quota exceeded" AND silently zero-length static archives
+that only fail later as "memory map must have a non-zero length").
+
 ## 🤝 STATE AT HANDOFF (2026-11-04) — Windows core built and vendored
 
 `logos_osm.dll` (43 MB, x86_64-pc-windows-gnu, cross-compiled from Linux)

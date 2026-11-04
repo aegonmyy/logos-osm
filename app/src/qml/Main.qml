@@ -36,6 +36,14 @@ Item {
     // below parses lastResult when it changes and routes it.
     property string pendingOp: ""
     property int    pendingRow: -1        // Regions tab: row awaiting a lookup
+    // Region picker state: the frozen set with live sizes (fetched after
+    // startup), the picker's selection, and the locally hosted set (from the
+    // catalog op) for the ever-valid "host all".
+    property var    regionList: []          // [{path, name, level}]
+    property var    regionSizes: ({})       // {path: bytes}
+    property bool   sizesLoading: false
+    property var    selectedRegions: []     // [path]
+    property var    hostedRegions: []       // [path] from the catalog
     property string discoverState: "pending"   // pending | ok | error
     property int    regionsAvailable: 0
     property int    regionsTotal: 72
@@ -47,16 +55,20 @@ Item {
     // restart (state persists under the module data tree).
     function openArgs() {
         const args = {
-            // Absolute path: the module host's CWD is not stable (it can
-            // even be a deleted dir), so relative state paths break.
-            state_path: "/home/codespace/.local/share/Logos/LogosBasecamp/module_data/osm/osm-state.json",
+            // No state_path: the module host's CWD is not stable (it can be
+            // a deleted dir) and no hardcoded absolute path is portable
+            // across machines, so the core resolves a per-user location
+            // (LOGOS_USER_DIR, else ~/.logos-osm, else the CWD). Same for
+            // the cache dir: only pass it when the user typed something
+            // other than the placeholder default.
             storage_url: storageUrl.text,
             geofabrik_url: geofabrikUrl.text,
-            cache_dir: cacheDir.text,
             // The registry this app talks to on the live LEZ testnet: the
             // OSM guest program deployed 2026-10-30.
             program_account_hex: "b2fa65027d9b2540d4ac2aa4e0a38040ac03604c2201930592c547f3d65ecb43"
         }
+        const cache = cacheDir.text.trim()
+        if (cache.length > 0 && cache !== "osm-cache") args.cache_dir = cache
         if (registrar.text.length) args.registrar_hex = registrar.text
         return args
     }
@@ -66,6 +78,27 @@ Item {
         root.call("discover")
     }
 
+    function regionDisplay(path) {
+        const s = root.regionSizes[path]
+        const size = (s !== undefined) ? ("  ·  " + fmtBytes(s)) : ""
+        return path + size
+    }
+    function fmtBytes(n) {
+        if (n >= 1e9) return (n / 1e9).toFixed(1) + " GB"
+        if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB"
+        return (n / 1e3).toFixed(0) + " KB"
+    }
+    function bytesOf(paths) {
+        let t = 0
+        for (const p of paths) if (root.regionSizes[p] !== undefined) t += root.regionSizes[p]
+        return t
+    }
+    function toggleRegion(path) {
+        const i = root.selectedRegions.indexOf(path)
+        if (i >= 0) root.selectedRegions.splice(i, 1)
+        else root.selectedRegions.push(path)
+        root.selectedRegions = root.selectedRegions.slice()
+    }
     Component.onCompleted: {
         root.call("open", root.openArgs())
     }
@@ -84,8 +117,30 @@ Item {
         const consoleText = root.pretty(r)
 
         if (op === "open") {
-            if (r.ok) root.runDiscover()
+            if (r.ok) {
+                root.runDiscover()
+                root.call("regions", {}, "regions-list")
+                root.call("catalog", {}, "catalog-list")
+            }
+        } else if (op === "regions-list") {
+            if (r.ok && r.result && r.result.regions) {
+                root.regionList = r.result.regions.map(g => ({
+                    path: g.path, name: g.name, level: g.level }))
+            }
+        } else if (op === "sizes") {
+            if (r.ok && r.result && r.result.sizes) root.regionSizes = r.result.sizes
+            root.sizesLoading = false
+        } else if (op === "catalog-list") {
+            if (r.ok && r.result && r.result.catalog) {
+                root.hostedRegions = r.result.catalog.map(c => c.region)
+            } else {
+                root.hostedRegions = []
+            }
         } else if (op === "discover") {
+            if (r.ok) {
+                root.sizesLoading = true
+                root.call("sizes", {}, "sizes")
+            }
             if (r.ok && r.result) {
                 root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
                 root.regionsTotal = r.result.total_set !== undefined ? r.result.total_set : 72
@@ -134,7 +189,11 @@ Item {
             let r
             try { r = JSON.parse(root.bk.lastResult) }
             catch (e) { r = { ok: false, error: root.bk.lastResult } }
-            root.onOpResult(root.pendingOp, r)
+            // Results arrive as property syncs, not return values, so the op
+            // that produced a result cannot be inferred from call order when
+            // several are in flight. The core tags every result with "op";
+            // fall back to the pending tag for cores that predate that.
+            root.onOpResult(r.op || root.pendingOp, r)
         }
     }
 
@@ -383,22 +442,27 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
             }
-            TextArea {
-                id: ta
+            // The output needs a real scroll view: the hosting page is a
+            // Flickable that eats wheel events over plain TextAreas, so the
+            // box gets a ScrollView that takes the wheel itself plus the
+            // draggable console bar.
+            ScrollView {
+                id: outScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                readOnly: true
-                wrapMode: TextArea.Wrap
-                // Explicit scrollbar: the hosting page is a Flickable that
-                // eats wheel events, so overflowing results need a draggable
-                // bar to climb.
                 ScrollBar.vertical: ConsoleScrollBar { }
-                font.family: root.fMono
-                font.pixelSize: 12
-                color: root.cTan
-                selectionColor: Qt.rgba(0.961, 0.961, 0.941, 0.22)
-                selectedTextColor: root.cTan
-                background: Item { }
+                TextArea {
+                    id: ta
+                    width: outScroll.availableWidth
+                    readOnly: true
+                    wrapMode: TextArea.Wrap
+                    font.family: root.fMono
+                    font.pixelSize: 12
+                    color: root.cTan
+                    selectionColor: Qt.rgba(0.961, 0.961, 0.941, 0.22)
+                    selectedTextColor: root.cTan
+                    background: Item { }
+                }
             }
         }
         Text {
@@ -506,7 +570,7 @@ Item {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.runDiscover()
-                    ToolTip.visible: hovered
+                    ToolTip.visible: containsMouse
                     ToolTip.text: "Re-run the live Geofabrik cross-check"
                     hoverEnabled: true
                 }
@@ -551,7 +615,7 @@ Item {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.runDiscover()
-                    ToolTip.visible: hovered
+                    ToolTip.visible: containsMouse
                     ToolTip.text: root.discoverState === "error" ? root.discoverError : "Live Geofabrik cross-check — click to refresh"
                     hoverEnabled: true
                 }
@@ -674,41 +738,216 @@ Item {
 
                     // -- Host --
                     SectionHead { numeral: "02"; heading: "Host (download → verify MD5 → Logos Storage)" }
-                    RowLayout {
+
+                    // Selected regions as pinned chips with × to cancel.
+                    Flow {
+                        id: selectedChips
                         Layout.fillWidth: true
-                        spacing: 12
-                        FieldCell {
-                            label: "REGION"
-                            MonoField { id: hostRegion; placeholderText: "region (e.g. germany, us/california)" }
-                        }
-                        PButton {
-                            Layout.alignment: Qt.AlignBottom
-                            text: "Host + registration tx"
-                            onClicked: {
-                                const args = { region: hostRegion.text.trim() }
-                                if (registrar.text.length) args.registrar_hex = registrar.text
-                                root.call("host", args)
+                        spacing: 6
+                        visible: root.selectedRegions.length > 0
+                        Repeater {
+                            model: root.selectedRegions
+                            delegate: Rectangle {
+                                radius: 4
+                                color: Qt.rgba(0.961, 0.961, 0.941, 0.08)
+                                border.width: 1
+                                border.color: root.cHair
+                                width: chipRow.implicitWidth + 16
+                                height: 26
+                                RowLayout {
+                                    id: chipRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+                                    Text {
+                                        text: modelData
+                                        font.family: root.fMono
+                                        font.pixelSize: 11
+                                        color: root.cTan
+                                    }
+                                    Text {
+                                        text: "×"
+                                        font.family: root.fSans
+                                        font.pixelSize: 13
+                                        color: root.cMuted
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.toggleRegion(modelData)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
-                        FieldCell {
-                            label: "OPT-OUT REGIONS"
-                            MonoField { id: optOut; placeholderText: "opt-out regions (comma)" }
+
+                        // The picker button + popup with the region list.
+                        SButton {
+                            Layout.alignment: Qt.AlignBottom
+                            text: (root.selectedRegions.length === 0)
+                                  ? (root.sizesLoading ? "Select regions  (sizes loading…)" : "Select regions ▾")
+                                  : (root.selectedRegions.length + " selected ▾")
+                            onClicked: regionPicker.open()
+                            Popup {
+                                id: regionPicker
+                                x: 0
+                                y: -(height + 8)
+                                width: 520
+                                height: 400
+                                padding: 1
+                                background: Rectangle {
+                                    radius: 8
+                                    color: root.cConsole
+                                    border.width: 1
+                                    border.color: root.cHair
+                                }
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        TextField {
+                                            id: pickerSearch
+                                            Layout.fillWidth: true
+                                            placeholderText: "filter…"
+                                            font.family: root.fMono
+                                            font.pixelSize: 11
+                                            color: root.cInk
+                                            background: Rectangle {
+                                                radius: 4
+                                                color: Qt.rgba(0,0,0,0.25)
+                                                border.width: 1
+                                                border.color: root.cHair
+                                            }
+                                            onTextChanged: pickerModel.update()
+                                        }
+                                        Text {
+                                            text: root.sizesLoading ? "sizes…" : root.regionList.length + " regions"
+                                            font.family: root.fSans
+                                            font.pixelSize: 10
+                                            color: root.cMuted
+                                        }
+                                    }
+                                    ListView {
+                                        id: pickerList
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        clip: true
+                                        ScrollBar.vertical: ConsoleScrollBar { }
+                                        model: ListModel { id: pickerModel
+                                            function update() {
+                                                clear()
+                                                const needle = (pickerSearch.text || "").toLowerCase()
+                                                for (const g of root.regionList) {
+                                                    if (needle.length === 0
+                                                        || g.path.toLowerCase().indexOf(needle) >= 0
+                                                        || (g.name||"").toLowerCase().indexOf(needle) >= 0) {
+                                                        append({ path: g.path, name: g.name, level: g.level })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        delegate: Rectangle {
+                                            width: pickerList.width
+                                            height: 34
+                                            color: pickerMouse.containsMouse ? root.cPanelHi : "transparent"
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 10
+                                                anchors.rightMargin: 10
+                                                spacing: 8
+                                                Text {
+                                                    text: root.selectedRegions.indexOf(model.path) >= 0 ? "×" : "·"
+                                                    color: root.selectedRegions.indexOf(model.path) >= 0 ? root.cAccent : root.cMuted
+                                                    font.pixelSize: 13
+                                                }
+                                                Text {
+                                                    text: model.path
+                                                    font.family: root.fMono
+                                                    font.pixelSize: 11
+                                                    color: root.cInk
+                                                    Layout.fillWidth: true
+                                                    elide: Text.ElideRight
+                                                }
+                                                Text {
+                                                    text: root.regionSizes[model.path] !== undefined
+                                                          ? root.fmtBytes(root.regionSizes[model.path]) : ""
+                                                    font.family: root.fMono
+                                                    font.pixelSize: 10
+                                                    color: root.cMuted
+                                                }
+                                            }
+                                            MouseArea {
+                                                id: pickerMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.toggleRegion(model.path)
+                                            }
+                                        }
+                                        Connections {
+                                            target: root
+                                            function onRegionListChanged() { pickerModel.update() }
+                                            function onRegionSizesChanged() { pickerModel.update() }
+                                        }
+                                        Component.onCompleted: pickerModel.update()
+                                    }
+                                }
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Actions + cumulative estimates.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        PButton {
+                            Layout.alignment: Qt.AlignBottom
+                            enabled: root.selectedRegions.length > 0
+                            opacity: enabled ? 1.0 : 0.4
+                            text: {
+                                const sel = root.selectedRegions
+                                const bytes = root.bytesOf(sel)
+                                return "Host selected  (" + sel.length + " · " +
+                                       (bytes ? root.fmtBytes(bytes) : "—") + ")"
+                            }
+                            onClicked: root.call("host_bulk",
+                                { regions: root.selectedRegions.join(",") })
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
-                            text: "Host bulk (all, small set first!)"
-                            onClicked: root.call("host_bulk", { regions: "all" })
-                        }
-                        SButton {
-                            Layout.alignment: Qt.AlignBottom
-                            text: "Bulk with opt-out"
+                            enabled: root.selectedRegions.length > 0
+                            opacity: enabled ? 1.0 : 0.4
+                            text: {
+                                const all = root.regionList.map(g => g.path)
+                                const keep = all.filter(p => root.selectedRegions.indexOf(p) < 0)
+                                const bytes = root.bytesOf(keep)
+                                return "Host all except selected  (" + keep.length +
+                                       (bytes ? " · " + root.fmtBytes(bytes) : "") + ")"
+                            }
                             onClicked: root.call("host_bulk", {
                                 regions: "all",
-                                opt_out: optOut.text.split(",").map(s => s.trim()).filter(s => s.length).join(",")
+                                opt_out: root.selectedRegions.join(",")
+                            })
+                        }
+                        SButton {
+                            Layout.alignment: Qt.AlignBottom
+                            text: {
+                                const all = root.regionList.map(g => g.path)
+                                const todo = all.filter(p => root.hostedRegions.indexOf(p) < 0)
+                                const bytes = root.bytesOf(todo)
+                                return "Host all  (" + todo.length + " new · " +
+                                       (bytes ? root.fmtBytes(bytes) : "—") + ")"
+                            }
+                            onClicked: root.call("host_bulk", {
+                                regions: "all",
+                                opt_out: root.hostedRegions.join(",")
                             })
                         }
                     }
