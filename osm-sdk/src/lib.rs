@@ -45,6 +45,7 @@
 pub mod ffi;
 pub mod geofabrik;
 pub mod osm;
+pub mod progress;
 pub mod regions;
 pub mod registry;
 pub mod retry;
@@ -52,3 +53,4 @@ pub mod storage;
 pub mod verify;
 
 pub use osm::{BulkHostReport, HostedSnapshot, ImportSummary, OsmClient, UpdateStatus};
+pub use progress::{JobProgress, Phase, Progress};

@@ -168,6 +168,12 @@ struct JobState {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<Value>,
+    /// Live progress for streaming jobs (host download/store, fetch). Absent
+    /// for instant ops. `job_status` snapshots this into the reply so the UI
+    /// can show bytes-so-far while the job runs. Skipped from serialization
+    /// (it's a shared atomic cell, not data).
+    #[serde(skip)]
+    progress: Option<crate::progress::Progress>,
 }
 
 static JOBS: Mutex<Vec<JobState>> = Mutex::new(Vec::new());
@@ -180,9 +186,29 @@ fn job_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Long ops are one-at-a-time: the UI's host loop serializes regions, and a
+/// second concurrent host/fetch is always an accidental double-fire (a click
+/// racing the button's enabled-binding update). The core refuses the
+/// duplicate so at most one long job (host OR fetch) runs per module
+/// process — also keeps a single download stream against Geofabrik/storage.
+fn running_long_job() -> Option<String> {
+    JOBS.lock()
+        .unwrap()
+        .iter()
+        .find(|j| j.state == "running" && (j.op == "host" || j.op == "fetch"))
+        .map(|j| j.id.clone())
+}
+
 /// Register a job, spawn its work, and return the job id. The closure runs
 /// on its own thread and may block freely; it must be `Send + 'static`.
-fn spawn_job<F>(op: &str, label: String, work: F) -> String
+/// `progress` is an optional live cell for streaming jobs (host/fetch) that
+/// `job_status` snapshots back to the UI; pass `None` for instant ops.
+fn spawn_job<F>(
+    op: &str,
+    label: String,
+    progress: Option<crate::progress::Progress>,
+    work: F,
+) -> String
 where
     F: FnOnce() -> Result<Value, String> + Send + 'static,
 {
@@ -209,6 +235,7 @@ where
             started_at: job_now(),
             error: None,
             result: None,
+            progress,
         });
     }
     let done_id = id.clone();
@@ -256,6 +283,24 @@ fn op_job_status(args: &Value) -> *mut c_char {
                     "elapsed".into(),
                     json!(job_now().saturating_sub(j.started_at)),
                 );
+                // Live byte progress for streaming jobs (host download/store,
+                // fetch). Absent for instant ops and for done/error jobs (the
+                // final result already carries bytes/cid). `total` is 0 when
+                // the transfer had no Content-Length (the UI shows "—").
+                if j.state == "running" {
+                    if let Some(p) = &j.progress {
+                        let (phase, done, total) = p.snapshot();
+                        map.insert(
+                            "progress".into(),
+                            json!({
+                                "phase": phase,
+                                "phase_label": crate::progress::phase_label(phase),
+                                "done": done,
+                                "total": total,
+                            }),
+                        );
+                    }
+                }
             }
             ok(v)
         }
@@ -314,6 +359,15 @@ impl Storage for AnyStorage {
         match self {
             AnyStorage::Memory(s) => s.get_to_file(cid, dest).await,
             AnyStorage::Codex(s) => s.get_to_file(cid, dest).await,
+        }
+    }
+
+    fn with_progress(self, p: crate::progress::Progress) -> Self {
+        // Only the streaming Codex backend reports; memory buffers, so the
+        // cell is dropped (its put/get are instantaneous anyway).
+        match self {
+            AnyStorage::Memory(s) => AnyStorage::Memory(s.with_progress(p)),
+            AnyStorage::Codex(s) => AnyStorage::Codex(s.with_progress(p)),
         }
     }
 }
@@ -697,31 +751,49 @@ fn op_host(args: &Value) -> *mut c_char {
     // which outruns the result channel and starves every op queued behind
     // it. Return a job id immediately; the UI polls job_status.
     if args.get("job").and_then(|b| b.as_bool()).unwrap_or(false) {
+        // One long job at a time: a second host (or a fetch) while one runs is
+        // an accidental double-fire (the UI disables the buttons while a job
+        // runs, but a click can race the enabled-binding update). Refuse so at
+        // most one download/stream is in flight.
+        if let Some(existing) = running_long_job() {
+            return err(format!(
+                "a long job is already running ({existing}); wait for it to finish"
+            ));
+        }
         let job_region = region.clone();
         let job_st = st.clone();
         let job_reg = registrar;
-        let id = spawn_job("host", format!("host {job_region}"), move || {
-            let c = client(&job_st);
-            let snap = rt()
-                .block_on(c.host_region(&job_region))
-                .map_err(|e| format!("host {job_region}: {e:#}"))?;
-            c.catalog_record_hosted(&snap)
-                .map_err(|e| format!("catalog: {e:#}"))?;
-            let tx = job_reg.as_ref().and_then(|reg| {
-                let account = require_program_account(&job_st).ok()?;
-                let built = build_register_region(&account, reg, &snap.registration(None));
-                Some(tx_json(&built, reg))
-            });
-            Ok(json!({
-                "region": snap.region,
-                "cid": snap.cid,
-                "version": snap.version,
-                "bytes": snap.bytes,
-                "md5": hex::encode(snap.checksum),
-                "path": snap.path.display().to_string(),
-                "tx": tx,
-            }))
-        });
+        // Live progress cell: the download/store streams tick it and
+        // job_status snapshots it back so the UI can show bytes-so-far.
+        let progress = crate::progress::JobProgress::new();
+        let p_for_closure = progress.clone();
+        let id = spawn_job(
+            "host",
+            format!("host {job_region}"),
+            Some(progress),
+            move || {
+                let c = client(&job_st).with_progress(p_for_closure);
+                let snap = rt()
+                    .block_on(c.host_region(&job_region))
+                    .map_err(|e| format!("host {job_region}: {e:#}"))?;
+                c.catalog_record_hosted(&snap)
+                    .map_err(|e| format!("catalog: {e:#}"))?;
+                let tx = job_reg.as_ref().and_then(|reg| {
+                    let account = require_program_account(&job_st).ok()?;
+                    let built = build_register_region(&account, reg, &snap.registration(None));
+                    Some(tx_json(&built, reg))
+                });
+                Ok(json!({
+                    "region": snap.region,
+                    "cid": snap.cid,
+                    "version": snap.version,
+                    "bytes": snap.bytes,
+                    "md5": hex::encode(snap.checksum),
+                    "path": snap.path.display().to_string(),
+                    "tx": tx,
+                }))
+            },
+        );
         return ok(json!({ "job_id": id, "op": "host", "region": region }));
     }
     let c = client(&st);
@@ -981,10 +1053,18 @@ fn op_fetch(args: &Value) -> *mut c_char {
     // minutes for big regions, which outruns the result channel. Same
     // pattern as `host`: job id now, poll job_status for the outcome.
     if args.get("job").and_then(|b| b.as_bool()).unwrap_or(false) {
+        // One long job at a time — same rationale as op_host's guard.
+        if let Some(existing) = running_long_job() {
+            return err(format!(
+                "a long job is already running ({existing}); wait for it to finish"
+            ));
+        }
         let (jr, jc, jm) = (region.clone(), cid.clone(), checksum);
         let job_st = st.clone();
-        let id = spawn_job("fetch", format!("fetch {jr}"), move || {
-            let c = client(&job_st);
+        let progress = crate::progress::JobProgress::new();
+        let p_for_closure = progress.clone();
+        let id = spawn_job("fetch", format!("fetch {jr}"), Some(progress), move || {
+            let c = client(&job_st).with_progress(p_for_closure);
             let outcome = rt()
                 .block_on(c.fetch_snapshot(&jr, &jc, &jm))
                 .map_err(|e| format!("fetch {jr}: {e:#}"))?;

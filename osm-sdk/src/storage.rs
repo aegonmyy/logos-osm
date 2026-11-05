@@ -81,6 +81,16 @@ pub trait Storage: Send + Sync {
             md5: hasher.finalize(),
         })
     }
+
+    /// Attach a live progress cell for streaming put/get. The default is a
+    /// no-op (the in-memory backend buffers, so there is nothing to report);
+    /// `CodexStorage` overrides it to tick bytes over the wire.
+    fn with_progress(self, _p: crate::progress::Progress) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 /// A real Logos Storage / Codex node over HTTP.
@@ -88,6 +98,9 @@ pub trait Storage: Send + Sync {
 pub struct CodexStorage {
     http: reqwest::Client,
     base: String,
+    /// Optional live progress cell ticked while a `put_file`/`get_to_file`
+    /// streams. Absent by default; the FFI host/fetch job sets it.
+    progress: Option<crate::progress::Progress>,
 }
 
 impl CodexStorage {
@@ -99,6 +112,7 @@ impl CodexStorage {
                 let b: String = base.into();
                 b.trim_end_matches('/').to_string()
             },
+            progress: None,
         }
     }
 
@@ -153,18 +167,40 @@ impl Storage for CodexStorage {
             .len();
 
         // A retried upload re-opens the file and restarts the body from the
-        // beginning, so the stream is built inside the retry closure.
+        // beginning, so the stream is built inside the retry closure. The
+        // progress cell (if any) marks the storing phase and is reset on each
+        // attempt so a retry's bar restarts from zero rather than overscrolling.
+        let progress = self.progress.clone();
         let cid = retry_transient(|| async {
+            if let Some(p) = &progress {
+                p.begin(crate::progress::Phase::Storing, len);
+            }
             let file = tokio::fs::File::open(path)
                 .await
                 .map_err(|e| RetryErr::Fatal(anyhow::anyhow!("open {}: {e}", path.display())))?;
+            // Wrap the reader stream so each chunk pulled by reqwest's HTTP
+            // encoder ticks the live progress cell — the upload is the slow
+            // phase for GB-scale files, so this is what makes the bar move.
             let stream = ReaderStream::with_capacity(file, 1 << 20);
+            let body: reqwest::Body = match &progress {
+                Some(p) => {
+                    use futures::StreamExt as _;
+                    let pc = p.clone();
+                    reqwest::Body::wrap_stream(stream.map(move |res| {
+                        if let Ok(ref b) = res {
+                            pc.add(b.len() as u64);
+                        }
+                        res
+                    }))
+                }
+                None => reqwest::Body::wrap_stream(stream),
+            };
             let resp = self
                 .http
                 .post(format!("{}/api/storage/v1/data", self.base))
                 .header("Content-Type", "application/octet-stream")
                 .header("Content-Length", len.to_string())
-                .body(reqwest::Body::wrap_stream(stream))
+                .body(body)
                 .send()
                 .await
                 .map_err(|e| {
@@ -238,6 +274,10 @@ impl Storage for CodexStorage {
                     RetryErr::Fatal(err)
                 });
             }
+            let total = resp.content_length();
+            if let Some(p) = &self.progress {
+                p.begin(crate::progress::Phase::Downloading, total.unwrap_or(0));
+            }
             let mut hasher = Md5Stream::new();
             let file = tokio::fs::File::create(dest)
                 .await
@@ -251,6 +291,9 @@ impl Storage for CodexStorage {
                 writer.write_all(&chunk).await.map_err(|e| {
                     RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display()))
                 })?;
+                if let Some(p) = &self.progress {
+                    p.add(chunk.len() as u64);
+                }
             }
             writer
                 .flush()
@@ -263,6 +306,11 @@ impl Storage for CodexStorage {
             })
         })
         .await
+    }
+
+    fn with_progress(mut self, p: crate::progress::Progress) -> Self {
+        self.progress = Some(p);
+        self
     }
 }
 

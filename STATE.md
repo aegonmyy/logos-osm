@@ -1,8 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-05** — post-1.3.5 hardening: dead-module tasks now
-> flip to error instead of hanging "running" forever.
+> **Last updated: 2026-11-05** — live byte progress for host/fetch + one-job-at-a-time.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
@@ -121,6 +120,79 @@ fine; the process doing the work was dead.
   mid-job — within ~15–20 s every running row flipped to the error
   message and `job_status` polling stopped (rows stayed; "Clear | N
   tracked" in the panel header).
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-05) — live byte progress + one-job-at-a-time
+
+Two more UX gaps closed on top of the v1.3.5 + crash-hardening work:
+
+### 1. Live progress during a host/fetch
+
+A running host showed only an elapsed timer — no indication how far the
+download/upload had gotten. Now the task row ticks
+`downloading 45 / 80 MB · 56%` → `storing 72 / 80 MB · 90%` → final summary.
+
+- **`osm-sdk/src/progress.rs` (new):** `JobProgress`, an `Arc` over lock-free
+  atomics (`phase: AtomicU8`, `done`/`total: AtomicU64`). `Phase` is
+  `Starting | Downloading | Storing`; a free `phase_label(u8)` maps the raw
+  byte back to a label (so the JSON carries a stable int + a friendly string).
+- **Streaming clients carry an optional progress cell** (absent by default —
+  CLI/tests unchanged): `GeofabrikClient::with_progress` ticks `done` per
+  chunk during the PBF download; `CodexStorage::with_progress` overrides the
+  trait's no-op default and ticks `done` as the `ReaderStream` feeds reqwest's
+  upload body (the slow phase for GB-scale files). The fetch path
+  (`get_to_file`) reports download progress from storage the same way.
+  `OsmClient::with_progress` fans the one cell out to both the Geofabrik and
+  storage sides; `AnyStorage`/`MemoryStorage` keep the trait's no-op default
+  (memory buffers, nothing to report).
+- **FFI:** `op_host`/`op_fetch` job branches create the cell, pass a clone
+  into the closure (`client(&st).with_progress(p)`), and store a clone on the
+  `JobState`. `op_job_status` snapshots it into the running reply as
+  `progress: {phase, phase_label, done, total}` (omitted when the job isn't
+  streaming or is done — the final result already carries bytes/cid).
+- **QML:** `onJobStatus`, on a `running` reply with `progress`, updates the
+  row's summary via `jobProgressText(p)` (`"{phase} {done} / {total} · N%"`,
+  `total` shows `—` when the transfer had no `Content-Length`). The state
+  stays `running` so the elapsed timer keeps going; the summary is replaced
+  by the final `taskSummary` on completion.
+
+### 2. One long job at a time (no duplicate concurrent hosts)
+
+A second host fired while one ran (double-click racing the button's
+`enabled` binding, or a stray click) started a second download against the
+same Geofabrik/storage node — wasteful, and the concurrent-job window is
+where the one-off module segfault earlier landed. Now defended at two layers:
+
+- **QML:** a `longJobBusy` binding (`Object.keys(jobPolls).length > 0`)
+  disables the three Host buttons **and** the Fetch button while any host or
+  fetch job is running (on top of the existing `hostLoopActive` loop guard).
+  A click on a disabled button is a no-op.
+- **Rust (last line of defense):** `op_host`/`op_fetch` job mode call
+  `running_long_job()`; if any host **or** fetch job is already `running`,
+  the call is refused with `{ok:false, error:"a long job is already running
+  (job-N); wait for it to finish"}`. The host loop never trips this —
+  `hostNext` fires the next region only after the previous job_status says
+  `done`, by which point the registry has that job `done` (not `running`).
+
+### Verification (real Basecamp, VNC :99)
+
+- **Progress:** hosted `china/jiangsu` (80 MB); `job_status` polls showed
+  `downloading 3.8→58.9 MB / 80 MB` ticking every second, then `storing
+  72.3 MB / 80 MB · 90%`, then `done` at elapsed ~16 s with the full
+  `bytes`/`cid`. The task row rendered `downloading … MB / 80 MB · N%` live
+  and resolved to `jiangsu · zDvZRwzkzF… · 80 MB`.
+- **Dedupe:** fired a host, then rapid duplicate clicks on "Host selected"
+  while it ran — no second job created (button disabled). Standalone ctypes
+  repro of a concurrent second host: refused with `"a long job is already
+  running (job-0); wait for it to finish"`. (Earlier "duplicate" runs that
+  appeared to create multiple jobs were an artifact of the OCR-driven click
+  tool's latency — every second click landed after the previous host had
+  finished, i.e. sequential re-fires, not concurrency.)
+
+`cargo test -p logos-osm --lib`: 42 passed, 1 ignored. `cargo clippy`: 0
+warnings. New file `osm-sdk/src/progress.rs`; edits in `geofabrik.rs`,
+`storage.rs`, `osm.rs`, `ffi.rs`, `lib.rs`, `app/src/qml/Main.qml`.
 
 ---
 

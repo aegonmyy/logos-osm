@@ -134,6 +134,18 @@ impl<S: Storage> OsmClient<S> {
         self
     }
 
+    /// Attach a live progress cell to both the Geofabrik downloader and the
+    /// storage backend. The FFI job layer sets this so a running host/fetch
+    /// can report bytes-downloaded/stored to the UI via `job_status`. A no-op
+    /// for backends that don't stream (memory).
+    pub fn with_progress(self, p: crate::progress::Progress) -> Self {
+        Self {
+            geofabrik: self.geofabrik.with_progress(p.clone()),
+            storage: self.storage.with_progress(p),
+            cache_dir: self.cache_dir,
+        }
+    }
+
     fn region_path(&self, region: &str) -> PathBuf {
         // `us/california` -> `us_california-latest.osm.pbf` (flat cache dir).
         self.cache_dir

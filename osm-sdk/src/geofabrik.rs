@@ -173,6 +173,10 @@ pub struct RegionInfo {
 pub struct GeofabrikClient {
     http: reqwest::Client,
     base: String,
+    /// Optional live progress cell ticked while a download streams. Absent
+    /// by default (CLI/tests); the FFI host job sets it so `job_status` can
+    /// report bytes-downloaded to the UI.
+    progress: Option<crate::progress::Progress>,
 }
 
 impl Default for GeofabrikClient {
@@ -195,7 +199,15 @@ impl GeofabrikClient {
                 let b: String = base.into();
                 b.trim_end_matches('/').to_string()
             },
+            progress: None,
         }
+    }
+
+    /// Attach a live progress cell; subsequent `download` calls tick it as
+    /// bytes stream in. Consumed by the FFI job layer.
+    pub fn with_progress(mut self, p: crate::progress::Progress) -> Self {
+        self.progress = Some(p);
+        self
     }
 
     /// Map a canonical table URL onto this client's base (mirror override).
@@ -376,6 +388,11 @@ impl GeofabrikClient {
             }
             let total = resp.content_length();
             let mut hasher = Md5Stream::new();
+            // A new download phase starts the progress counters at zero (the
+            // total may be unknown for a chunked transfer -> 0 -> "—").
+            if let Some(p) = &self.progress {
+                p.begin(crate::progress::Phase::Downloading, total.unwrap_or(0));
+            }
             let file = tokio::fs::File::create(dest)
                 .await
                 .map_err(|e| RetryErr::Fatal(anyhow::anyhow!("create {}: {e}", dest.display())))?;
@@ -389,6 +406,13 @@ impl GeofabrikClient {
                 writer.write_all(&chunk).await.map_err(|e| {
                     RetryErr::Fatal(anyhow::anyhow!("write {}: {e}", dest.display()))
                 })?;
+                // Tick the live progress cell (relaxed atomic, cheap) so the
+                // UI's job_status poll can show bytes-downloaded. Batch to the
+                // existing 64 MiB cadence only for the tracing log below; the
+                // cell updates every chunk for a smooth bar.
+                if let Some(p) = &self.progress {
+                    p.add(chunk.len() as u64);
+                }
                 if hasher.len() - last_report >= 64 << 20 {
                     last_report = hasher.len();
                     tracing::info!(

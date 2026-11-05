@@ -122,6 +122,13 @@ Item {
     // side polls the cheap `job_status` op (milliseconds, always delivers).
     // jobPolls maps job_id -> {taskId, host} while a poll is outstanding.
     property var jobPolls: ({})
+    // True while any long job (host / fetch) is running. Long ops are
+    // one-at-a-time by design: the host loop serializes regions, and a
+    // second concurrent host/fetch is always an accidental double-fire
+    // (double-click racing the enabled-binding update). The buttons bind
+    // their `enabled` to this; the core also refuses a duplicate (see
+    // op_host/op_fetch "already running" errors) as the last line of defense.
+    readonly property bool longJobBusy: Object.keys(root.jobPolls).length > 0
     // A poll is "in flight" until its result lands — but the result channel
     // (the `lastResult` property sync) SILENTLY DROPS a value that is byte-
     // identical to the previous one (the generated setLastResult short-
@@ -205,6 +212,18 @@ Item {
         if (n >= 1e9) return (n / 1e9).toFixed(1) + " GB"
         if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB"
         return (n / 1e3).toFixed(0) + " KB"
+    }
+    // Live-progress summary line for a running job: "downloading 45 / 80 MB"
+    // (or "storing …"; total "—" when the transfer had no Content-Length).
+    // percent-of-total only when the total is known.
+    function jobProgressText(p) {
+        const phase = p.phase_label || "working"
+        const done = root.fmtBytes(p.done || 0)
+        const total = (p.total || 0) > 0 ? root.fmtBytes(p.total) : "—"
+        let t = phase + " " + done + " / " + total
+        if ((p.total || 0) > 0)
+            t += " · " + Math.min(100, Math.floor(100 * (p.done || 0) / p.total)) + "%"
+        return t
     }
     function bytesOf(paths) {
         let t = 0
@@ -540,7 +559,9 @@ Item {
     }
 
     // A job_status result: resolve the attached task when the job finished;
-    // host jobs also advance the sequential loop.
+    // host jobs also advance the sequential loop. While running, the reply
+    // can carry live byte progress (host download/store, fetch) — surface it
+    // on the row so the user sees "downloading 45 / 80 MB", not a bare timer.
     function onJobStatus(r) {
         root.jobStatusInFlight = false
         // A valid reply means the module is alive again (or the misses were
@@ -550,7 +571,17 @@ Item {
         const j = r.result
         const entry = root.jobPolls[j.id]
         if (!entry) return
-        if (j.state === "running") return   // still working; next tick re-polls
+        if (j.state === "running") {
+            // Live progress tick: update the row's summary (state stays
+            // "running" so the elapsed timer keeps going).
+            if (j.progress) {
+                const task = root.tasks.find(x => x.id === entry.taskId)
+                if (task) root.updateTask(task.id, {
+                    summary: root.jobProgressText(j.progress)
+                })
+            }
+            return   // still working; next tick re-polls
+        }
         const next = Object.assign({}, root.jobPolls)
         delete next[j.id]
         root.jobPolls = next
@@ -1996,7 +2027,7 @@ Item {
                         spacing: 12
                         PButton {
                             Layout.alignment: Qt.AlignBottom
-                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive
+                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive && !root.longJobBusy
                             opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const sel = root.selectedRegions
@@ -2008,7 +2039,7 @@ Item {
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
-                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive
+                            enabled: root.selectedRegions.length > 0 && !root.hostLoopActive && !root.longJobBusy
                             opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const all = root.regionList.map(g => g.path)
@@ -2023,7 +2054,7 @@ Item {
                         }
                         SButton {
                             Layout.alignment: Qt.AlignBottom
-                            enabled: !root.hostLoopActive
+                            enabled: !root.hostLoopActive && !root.longJobBusy
                             opacity: enabled ? 1.0 : 0.4
                             text: {
                                 const all = root.regionList.map(g => g.path)
@@ -2395,7 +2426,7 @@ Item {
                         RowLayout {
                             spacing: 12
                             PButton {
-                                enabled: root.fetchRegion !== ""
+                                enabled: root.fetchRegion !== "" && !root.longJobBusy
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Fetch + import"
                                 onClicked: root.call("fetch", {
