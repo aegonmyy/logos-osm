@@ -137,6 +137,18 @@ Item {
     // delivers; the deadline is defense in depth against any dropped frame.
     property bool jobStatusInFlight: false
     property int jobStatusPollDeadline: 0   // taskTick at which to re-arm
+    // Consecutive job_status polls that got no valid reply. A dead/crashed
+    // osm module answers every invokeOp with "" (invokeRemoteMethod returns
+    // null when the remote never replies), so lastResult stays empty,
+    // onLastResultChanged never fires, and onJobStatus never runs — the
+    // deadline re-arm keeps polling, but nothing ever resolves the row. Each
+    // re-arm with no answer bumps this; once it crosses the threshold we
+    // conclude the module is gone and surface the running tasks as errors
+    // instead of leaving them "running" forever (the exact symptom a
+    // module-host segfault produced: the task sat running 20+ min while the
+    // process that would do the work was already dead).
+    property int jobStatusMisses: 0
+    readonly property int jobStatusMissLimit: 5   // ~15 s of an unresponsive module
 
     // Auto-init: open the SDK session on startup; discover follows once the
     // session is up. The user never thinks about "Open" — the fields above
@@ -472,14 +484,52 @@ Item {
         const ids = Object.keys(root.jobPolls)
         if (ids.length === 0 || !root.bk) return
         // Re-arm if a previous poll's result never landed (dropped/deduped).
-        if (root.jobStatusInFlight && root.taskTick >= root.jobStatusPollDeadline)
+        if (root.jobStatusInFlight && root.taskTick >= root.jobStatusPollDeadline) {
             root.jobStatusInFlight = false
+            // No valid reply within the deadline. A dropped/deduped frame
+            // happens occasionally and the next poll recovers; but a DEAD
+            // module answers every poll with "" and never recovers. Count
+            // consecutive misses so a sustained silence trips the failover
+            // instead of polling a corpse forever.
+            root.jobStatusMisses++
+            if (root.jobStatusMisses >= root.jobStatusMissLimit) {
+                root.failRunningJobs(
+                    "module not responding — it may have crashed; restart Basecamp")
+                return
+            }
+        }
         if (root.jobStatusInFlight) return
         root.jobStatusInFlight = true
         // Re-arm after ~3 ticks even if nothing arrives — the job_status op
         // is sub-millisecond server-side, so 3 s is a generous drop timeout.
         root.jobStatusPollDeadline = root.taskTick + 3
         root.bk.invokeOp("job_status", JSON.stringify({ job_id: ids[0] }))
+    }
+
+    // The module has stopped answering job_status (almost certainly crashed:
+    // a segfault in the logos_host process kills it mid-job). Flip every
+    // still-running job-tracked task to an error row so the user sees what
+    // happened instead of a phantom "running" task, and stop the host loop +
+    // polling. The rows stay (Clear removes them); the job threads are gone
+    // with the process, so there is nothing server-side to keep tracking.
+    function failRunningJobs(reason) {
+        const dead = []
+        for (let i = 0; i < root.tasks.length; i++) {
+            if (root.tasks[i].state === "running") dead.push(root.tasks[i])
+        }
+        for (let i = 0; i < dead.length; i++) {
+            root.updateTask(dead[i].id, { state: "error", summary: reason })
+        }
+        // If the host loop was mid-run, surface its group task too and halt.
+        if (root.hostLoopActive) {
+            root.hostLoopActive = false
+            root.hostQueue = []
+            root.updateTask(root.hostTaskId, { state: "error", summary: reason })
+        }
+        root.jobPolls = ({})
+        root.jobStatusInFlight = false
+        root.jobStatusPollDeadline = 0
+        root.jobStatusMisses = 0
     }
 
     function runningTaskFor(coreOp) {
@@ -493,6 +543,9 @@ Item {
     // host jobs also advance the sequential loop.
     function onJobStatus(r) {
         root.jobStatusInFlight = false
+        // A valid reply means the module is alive again (or the misses were
+        // transient drops) — clear the dead-module streak.
+        if (r.ok && r.result && r.result.id) root.jobStatusMisses = 0
         if (!r.ok || !r.result || !r.result.id) return
         const j = r.result
         const entry = root.jobPolls[j.id]
@@ -554,6 +607,7 @@ Item {
         root.jobPolls = ({})
         root.jobStatusInFlight = false
         root.jobStatusPollDeadline = 0
+        root.jobStatusMisses = 0
         root.hostLoopActive = false
         root.hostQueue = []
         root.tasks = []

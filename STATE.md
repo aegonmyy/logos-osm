@@ -1,7 +1,8 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-05** — the long-op result-delivery + Clear fix.
+> **Last updated: 2026-11-05** — post-1.3.5 hardening: dead-module tasks now
+> flip to error instead of hanging "running" forever.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
@@ -79,7 +80,47 @@ storage module's live libp2p node:
   at +12 s) — its bytes land regardless; Clear only stops the UI tracking.
 
 `cargo test -p logos-osm --lib`: 42 passed, 1 ignored. `cargo clippy`:
-0 warnings. **Not yet shipped** — awaiting the user's go (their rule).
+0 warnings. Shipped as **v1.3.5** (commit 3c4851c; all three metadata
+files bumped; the windows vendor DLL rebuilt to match. The linux vendor
+`liblogos_osm.so` in `module/vendor/x86_64-linux/` still needs the same
+rebuild+commit when someone next builds on linux).
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-05, post-1.3.5) — module-crash hang + hardening
+
+A user-hosted `czech-republic` (951 MB) sat "running" 5+ minutes after
+1.3.5. Investigation: **the osm module host process had segfaulted**
+(signal 11 at 18:03, per basecamp.log) — the wire shows the host dispatch
+forwarded, **no ack ever returned**, then `module_state_changed: osm →
+error / module exited without being asked to`. The job/poll code was
+fine; the process doing the work was dead.
+
+- **Not reproducible.** Three attempts: (1) re-ran the exact sequence
+  in-app — jiangsu host running at elapsed ~15, czech fired on top, core
+  dumps armed — no crash; czech went running→done in 77 s (951,801,724
+  bytes, `cid zDvZRwzmC75…`, catalog 28→29). (2)(3) ctypes with the same
+  `.so`, single and two concurrent hosts (jiangsu + czech overlapping) —
+  no crash. The segfault correlates with a degraded-libp2p window in the
+  storage module right before it (`Stream Closed!`, `Missed multiple
+  heartbeats`, `No key for a QueryResponse`); likely a transient
+  native-level fault, not a deterministic bug in the job paths. Note
+  `catch_unwind` cannot help against SIGSEGV.
+- **The real gap it exposed:** a dead module answers every `invokeOp`
+  with `""` (the RemoteObjects call simply never returns), so
+  `lastResult` stays empty, `onJobStatus` never runs, and the row would
+  poll a corpse forever — exactly the phantom "running" task the user saw.
+- **Hardening (QML only, on top of 1.3.5):** consecutive-miss detection
+  in the existing poll loop. Each deadline re-arm with no valid
+  `job_status` reply bumps `jobStatusMisses`; at 5 (~15 s of silence)
+  `failRunningJobs()` flips every still-running task to
+  `error: "module not responding — it may have crashed; restart
+  Basecamp"`, halts the host loop, and stops polling. A valid reply
+  resets the streak; `clearTasks()` resets the counter.
+- **Verified live:** fired a jiangsu host, `kill -9`'d the module host
+  mid-job — within ~15–20 s every running row flipped to the error
+  message and `job_status` polling stopped (rows stayed; "Clear | N
+  tracked" in the panel header).
 
 ---
 
