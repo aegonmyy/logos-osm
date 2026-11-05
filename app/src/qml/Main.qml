@@ -115,6 +115,29 @@ Item {
     property string hostCurrent: ""     // region whose host op is in flight
     property int hostTaskId: -1         // the grouped task's id
 
+    // Background jobs: long ops (host, fetch) outrun the RemoteObjects
+    // result channel — anything past roughly a minute is silently dropped —
+    // and while one runs, every op queued behind it starves. The core runs
+    // them as jobs instead: the op returns a job id instantly, and this
+    // side polls the cheap `job_status` op (milliseconds, always delivers).
+    // jobPolls maps job_id -> {taskId, host} while a poll is outstanding.
+    property var jobPolls: ({})
+    // A poll is "in flight" until its result lands — but the result channel
+    // (the `lastResult` property sync) SILENTLY DROPS a value that is byte-
+    // identical to the previous one (the generated setLastResult short-
+    // circuits on equalStrings and never emits lastResultChanged). While a
+    // job is running, every job_status reply is identical, so after the first
+    // poll the second's result never reaches onJobStatus and the boolean
+    // would stick true forever — killing the poll loop and leaving the task
+    // "running" long after the job finished server-side.
+    //
+    // Track a deadline instead: if no result has re-armed us within a few
+    // ticks, assume the reply was dropped/deduped and re-fire. The Rust side
+    // also varies the running result (elapsed_secs) so the normal path still
+    // delivers; the deadline is defense in depth against any dropped frame.
+    property bool jobStatusInFlight: false
+    property int jobStatusPollDeadline: 0   // taskTick at which to re-arm
+
     // Auto-init: open the SDK session on startup; discover follows once the
     // session is up. The user never thinks about "Open" — the fields above
     // are applied automatically, and editing them re-fires on the next
@@ -387,6 +410,9 @@ Item {
     // the routed op (r.op when the core tags results, else the local
     // pendingOp tag, normalized back to the core name).
     function resolveTaskResult(op, r) {
+        // A job dispatch ack is not the task's outcome — the task resolves
+        // from job_status when the background work finishes.
+        if (r.ok && r.result && r.result.job_id) return
         let core = op
         if (core === "regions-list") core = "regions"
         else if (core === "catalog-list") core = "catalog"
@@ -430,7 +456,109 @@ Item {
         if (root.hostQueue.length === 0) return
         root.hostCurrent = root.hostQueue[0]
         root.hostQueue = root.hostQueue.slice(1)
-        root.call("host", { region: root.hostCurrent })
+        // Job mode: a real host runs minutes and its direct result never
+        // survives the transport; the loop advances from job_status polls.
+        root.call("host", { region: root.hostCurrent, job: true })
+    }
+
+    // ---- Job polling --------------------------------------------------------
+    // One job_status per tick while polls are outstanding. The op is instant
+    // server-side, but its result may be dropped by the transport: the
+    // `lastResult` property sync silently no-ops on a byte-identical value
+    // (see jobStatusInFlight above), and a frame colliding with another op in
+    // flight can drop too. Either way the deadline re-arms the loop within a
+    // few ticks instead of stalling forever.
+    function pollJobs() {
+        const ids = Object.keys(root.jobPolls)
+        if (ids.length === 0 || !root.bk) return
+        // Re-arm if a previous poll's result never landed (dropped/deduped).
+        if (root.jobStatusInFlight && root.taskTick >= root.jobStatusPollDeadline)
+            root.jobStatusInFlight = false
+        if (root.jobStatusInFlight) return
+        root.jobStatusInFlight = true
+        // Re-arm after ~3 ticks even if nothing arrives — the job_status op
+        // is sub-millisecond server-side, so 3 s is a generous drop timeout.
+        root.jobStatusPollDeadline = root.taskTick + 3
+        root.bk.invokeOp("job_status", JSON.stringify({ job_id: ids[0] }))
+    }
+
+    function runningTaskFor(coreOp) {
+        for (let i = 0; i < root.tasks.length; i++)
+            if (root.tasks[i].state === "running" && root.tasks[i].op === coreOp)
+                return root.tasks[i]
+        return null
+    }
+
+    // A job_status result: resolve the attached task when the job finished;
+    // host jobs also advance the sequential loop.
+    function onJobStatus(r) {
+        root.jobStatusInFlight = false
+        if (!r.ok || !r.result || !r.result.id) return
+        const j = r.result
+        const entry = root.jobPolls[j.id]
+        if (!entry) return
+        if (j.state === "running") return   // still working; next tick re-polls
+        const next = Object.assign({}, root.jobPolls)
+        delete next[j.id]
+        root.jobPolls = next
+        const task = root.tasks.find(x => x.id === entry.taskId)
+        if (j.state === "done") {
+            if (task) root.updateTask(task.id, {
+                state: "done",
+                summary: root.taskSummary(j.op, { ok: true, result: j.result }, task)
+            })
+            if (entry.host) root.onHostJobDone(j.result || {})
+        } else {
+            if (task) root.updateTask(task.id, { state: "error", summary: j.error || "failed" })
+            if (entry.host) root.onHostJobError(j.error || "host failed")
+        }
+    }
+
+    function onHostJobDone(res) {
+        if (!root.hostLoopActive) return
+        root.hostDoneCount++
+        root.hostBytes += (res.bytes || 0)
+        root.updateTask(root.hostTaskId, {
+            summary: "hosting " + root.hostDoneCount + "/" + root.hostTotal
+                   + " · " + (res.region || root.hostCurrent) + " ✓ · "
+                   + root.fmtBytes(root.hostBytes) + " so far"
+        })
+        if (root.hostDoneCount >= root.hostTotal) {
+            root.hostLoopActive = false
+            root.updateTask(root.hostTaskId, {
+                state: "done",
+                summary: root.hostDoneCount + " hosted · " + root.fmtBytes(root.hostBytes)
+            })
+            // The run changed the catalog; refresh it for Consumer's "use
+            // cached file". job_status just returned, so the dispatcher is
+            // free and the call is safe.
+            root.call("catalog", {}, "catalog-list")
+        } else {
+            root.hostNext()
+        }
+    }
+
+    function onHostJobError(msg) {
+        root.hostLoopActive = false
+        root.updateTask(root.hostTaskId, {
+            state: "error",
+            summary: root.hostCurrent + ": " + msg
+        })
+    }
+
+    // Clear the task panel: stop the host loop and all job polling, drop
+    // completed rows. In-flight jobs keep running server-side (their bytes
+    // land regardless); their results are simply not shown. Also unsticks
+    // the incidental UI the dropped results would have reset.
+    function clearTasks() {
+        root.jobPolls = ({})
+        root.jobStatusInFlight = false
+        root.jobStatusPollDeadline = 0
+        root.hostLoopActive = false
+        root.hostQueue = []
+        root.tasks = []
+        if (root.sizesLoading) root.sizesLoading = false
+        if (root.discoverState === "pending") root.discoverState = "ok"
     }
 
     // Runs from onOpResult for op "host" while a run is active; the
@@ -537,8 +665,29 @@ Item {
                 root.hostedRegions = []
             }
         } else if (op === "host") {
-            // The sequential host loop advances from this result.
-            root.onHostResult(r)
+            if (r.ok && r.result && r.result.job_id) {
+                // Job dispatch ack: attach the poll to the running task.
+                const t = root.runningTaskFor("host")
+                if (t) {
+                    const next = Object.assign({}, root.jobPolls)
+                    next[r.result.job_id] = { taskId: t.id, host: true }
+                    root.jobPolls = next
+                }
+            } else {
+                // Synchronous host result (old core, or a direct call).
+                root.onHostResult(r)
+            }
+        } else if (op === "fetch") {
+            if (r.ok && r.result && r.result.job_id) {
+                const t = root.runningTaskFor("fetch")
+                if (t) {
+                    const next = Object.assign({}, root.jobPolls)
+                    next[r.result.job_id] = { taskId: t.id, host: false }
+                    root.jobPolls = next
+                }
+            }
+        } else if (op === "job_status") {
+            root.onJobStatus(r)
         } else if (op === "lookup_bulk") {
             if (r.ok && r.result && r.result.statuses) {
                 // MERGE (mirrors the core's state-file merge): fetched
@@ -563,9 +712,13 @@ Item {
             }
             if (r.ok) root.call("regions", {}, "regions-list")
         }
-        if (root.currentTab === 0)      out.outputText  = consoleText
-        else if (root.currentTab === 1) outR.outputText = consoleText
-        else                            out2.outputText = consoleText
+        // The 1 Hz job_status polls are bookkeeping, not results — keep
+        // them out of the output consoles.
+        if (op !== "job_status") {
+            if (root.currentTab === 0)      out.outputText  = consoleText
+            else if (root.currentTab === 1) outR.outputText = consoleText
+            else                            out2.outputText = consoleText
+        }
 
         if (op === "regions" || op === "regions-list") {
             // The badges join the frozen list with whatever statuses are
@@ -625,7 +778,10 @@ Item {
         interval: 1000
         repeat: true
         running: root.runningTasks > 0
-        onTriggered: root.taskTick++
+        onTriggered: {
+            root.taskTick++
+            root.pollJobs()
+        }
     }
 
     // ---- Logos identity tokens (from logos.co live CSS) ------------------
@@ -994,10 +1150,39 @@ Item {
         property bool singleSelect: false
         signal picked(string path)
         x: 0
-        y: -(height + 8)
         width: 520
         height: 400
         padding: 1
+        // Placement: above the button when it fits, else below with a height
+        // clamped to the window — on a 1280x800 screen the Host §02 button
+        // sits ~315 px down, so a fixed 400 px popup hanging upwards had its
+        // filter field (and the first rows) clipped above the screen top.
+        // `anchorItem` is the button that opens the popup.
+        property Item anchorItem: null
+        function place() {
+            // The popup's parent is the anchor button, so y is relative to it:
+            // above = -(height + gap), below = +height + gap. Only the
+            // button's absolute position decides whether "above" fits.
+            const gap = 8
+            const btn = rpp.anchorItem
+            const winH = root.height > 0 ? root.height : 800
+            const bottomAbs = btn ? btn.mapToItem(null, 0, btn.height).y
+                                  : rpp.parent.height
+            const above = bottomAbs - gap
+            const below = winH - bottomAbs - gap
+            const want = 400
+            if (above >= want) {
+                rpp.height = want
+                rpp.y = -(want + gap)
+            } else if (below >= Math.min(want, above)) {
+                rpp.height = Math.max(180, Math.min(want, below))
+                rpp.y = gap
+            } else {
+                rpp.height = Math.max(180, Math.min(want, above))
+                rpp.y = -(rpp.height + gap)
+            }
+        }
+        onOpened: rpp.place()
         background: Rectangle {
             radius: 8
             color: root.cConsole
@@ -1407,6 +1592,18 @@ Item {
                                 color: root.cMuted
                             }
                             Item { Layout.fillWidth: true }
+                            SButton {
+                                // Stops the host loop and job polling, drops
+                                // completed rows. In-flight jobs keep running
+                                // server-side; their results are not shown.
+                                text: "Clear"
+                                font.pixelSize: 9
+                                topPadding: 2; bottomPadding: 2
+                                leftPadding: 8; rightPadding: 8
+                                onClicked: root.clearTasks()
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Stop incomplete tasks and clear the list"
+                            }
                             Text {
                                 text: root.tasks.length + " tracked"
                                 font.family: root.fSans
@@ -1720,6 +1917,7 @@ Item {
 
                         // The picker button + the shared region popup.
                         SButton {
+                            id: hostPickBtn
                             Layout.alignment: Qt.AlignBottom
                             text: (root.selectedRegions.length === 0)
                                   ? (root.sizesLoading ? "Select regions  (sizes loading…)" : "Select regions ▾")
@@ -1727,6 +1925,7 @@ Item {
                             onClicked: hostPicker.open()
                             RegionPickPopup {
                                 id: hostPicker
+                                anchorItem: hostPickBtn
                                 selection: root.selectedRegions
                                 onPicked: function(path) { root.toggleRegion(path) }
                             }
@@ -2081,12 +2280,14 @@ Item {
                         RowLayout {
                             spacing: 12
                             SButton {
+                            id: fetchPickBtn
                                 text: (root.fetchRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.fetchRegion + " ▾")
                                 onClicked: fetchPicker.open()
                                 RegionPickPopup {
                                     id: fetchPicker
+                                anchorItem: fetchPickBtn
                                     singleSelect: true
                                     single: root.fetchRegion
                                     onPicked: function(path) { root.setFetchRegion(path) }
@@ -2146,7 +2347,11 @@ Item {
                                 onClicked: root.call("fetch", {
                                     region: root.fetchRegion,
                                     cid: fCid.text.trim(),
-                                    md5_hex: fMd5.text.trim()
+                                    md5_hex: fMd5.text.trim(),
+                                    // Job mode: a fetch pulls the full region
+                                    // PBF — minutes — so its result comes via
+                                    // job_status polls, not this call.
+                                    job: true
                                 })
                             }
                             Item { Layout.fillWidth: true }
@@ -2194,12 +2399,14 @@ Item {
                         RowLayout {
                             spacing: 12
                             SButton {
+                            id: importPickBtn
                                 text: (root.importRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.importRegion + " ▾")
                                 onClicked: importPicker.open()
                                 RegionPickPopup {
                                     id: importPicker
+                                anchorItem: importPickBtn
                                     singleSelect: true
                                     single: root.importRegion
                                     onPicked: function(path) { root.setImportRegion(path) }
@@ -2296,12 +2503,14 @@ Item {
                             Layout.fillWidth: true
                             spacing: 12
                             SButton {
+                            id: updatePickBtn
                                 text: (root.updateRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.updateRegion + " ▾")
                                 onClicked: updatePicker.open()
                                 RegionPickPopup {
                                     id: updatePicker
+                                anchorItem: updatePickBtn
                                     singleSelect: true
                                     single: root.updateRegion
                                     onPicked: function(path) { root.setUpdateRegion(path) }

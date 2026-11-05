@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -139,6 +140,128 @@ impl AppState {
 /// single-state behavior (the most recently opened session).
 static SESSIONS: Mutex<Option<HashMap<String, AppState>>> = Mutex::new(None);
 static ACTIVE_SESSION: Mutex<String> = Mutex::new(String::new());
+
+// ---------------------------------------------------------------------------
+// Background jobs
+//
+// The RemoteObjects result channel silently drops the result of any op that
+// runs longer than roughly a minute (observed: an 8-minute `host` completed
+// fully server-side — bytes stored, catalog updated, core idle — while the
+// task in the UI stayed "running" forever). It also serializes ops behind
+// whatever is running, so one long op starves every other report.
+//
+// Long ops therefore run as jobs: the op returns a job id immediately (the
+// dispatcher is free), the work continues on a std thread against the shared
+// tokio runtime, and the UI polls the cheap `job_status` op — which always
+// delivers, being milliseconds.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, serde::Serialize)]
+struct JobState {
+    id: String,
+    op: String,
+    label: String,
+    /// "running" | "done" | "error"
+    state: String,
+    started_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+}
+
+static JOBS: Mutex<Vec<JobState>> = Mutex::new(Vec::new());
+static JOB_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn job_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Register a job, spawn its work, and return the job id. The closure runs
+/// on its own thread and may block freely; it must be `Send + 'static`.
+fn spawn_job<F>(op: &str, label: String, work: F) -> String
+where
+    F: FnOnce() -> Result<Value, String> + Send + 'static,
+{
+    let id = format!("job-{}", JOB_SEQ.fetch_add(1, Ordering::Relaxed));
+    {
+        let mut g = JOBS.lock().unwrap();
+        // Keep the registry bounded: at most 12 finished jobs, oldest first.
+        let finished = g.iter().filter(|j| j.state != "running").count();
+        let mut to_drop = finished.saturating_sub(12);
+        let mut i = 0;
+        while i < g.len() && to_drop > 0 {
+            if g[i].state != "running" {
+                g.remove(i);
+                to_drop -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        g.push(JobState {
+            id: id.clone(),
+            op: op.to_string(),
+            label,
+            state: "running".to_string(),
+            started_at: job_now(),
+            error: None,
+            result: None,
+        });
+    }
+    let done_id = id.clone();
+    std::thread::spawn(move || {
+        // A panic in the job thread must not leave the job "running"
+        // forever — catch it and surface it as the job's error.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+            .unwrap_or_else(|p| Err(format!("job panicked: {p:?}")));
+        if let Ok(mut g) = JOBS.lock() {
+            if let Some(j) = g.iter_mut().find(|j| j.id == done_id) {
+                match outcome {
+                    Ok(v) => {
+                        j.state = "done".to_string();
+                        j.result = Some(v);
+                    }
+                    Err(e) => {
+                        j.state = "error".to_string();
+                        j.error = Some(e);
+                    }
+                }
+            }
+        }
+    });
+    id
+}
+
+/// Cheap status snapshot for one job — the op the UI polls.
+fn op_job_status(args: &Value) -> *mut c_char {
+    let Some(id) = str_arg(args, "job_id") else {
+        return err("job_status requires job_id");
+    };
+    let g = JOBS.lock().unwrap();
+    match g.iter().find(|j| j.id == id) {
+        Some(j) => {
+            let mut v = serde_json::to_value(j).unwrap_or_else(|_| json!({"ok": false}));
+            // Vary the reply while running: the transport delivers results
+            // via a `lastResult` property that no-ops on a byte-identical
+            // value. While a job is running the serialized JobState is
+            // otherwise identical poll-to-poll, so the second poll's reply
+            // would never reach the UI and the poll loop would stall. Adding
+            // elapsed (seconds since start) makes every running reply
+            // distinct so the property sync always emits.
+            if let Value::Object(ref mut map) = v {
+                map.insert(
+                    "elapsed".into(),
+                    json!(job_now().saturating_sub(j.started_at)),
+                );
+            }
+            ok(v)
+        }
+        None => err(format!("unknown job {id}")),
+    }
+}
 
 fn rt() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -406,6 +529,7 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
             ok(json!({ "regions": out, "count": out.len() }))
         }
         "sizes" => op_sizes(args),
+        "job_status" => op_job_status(args),
         "discover" => op_discover(args),
         "host" => op_host(args),
         "host_bulk" => op_host_bulk(args),
@@ -569,6 +693,37 @@ fn op_host(args: &Value) -> *mut c_char {
     let Some(st) = state_snapshot(args) else {
         return err("osm not open: call open first");
     };
+    // Job mode: a real host runs minutes (region downloads are 50 MB–6 GB),
+    // which outruns the result channel and starves every op queued behind
+    // it. Return a job id immediately; the UI polls job_status.
+    if args.get("job").and_then(|b| b.as_bool()).unwrap_or(false) {
+        let job_region = region.clone();
+        let job_st = st.clone();
+        let job_reg = registrar;
+        let id = spawn_job("host", format!("host {job_region}"), move || {
+            let c = client(&job_st);
+            let snap = rt()
+                .block_on(c.host_region(&job_region))
+                .map_err(|e| format!("host {job_region}: {e:#}"))?;
+            c.catalog_record_hosted(&snap)
+                .map_err(|e| format!("catalog: {e:#}"))?;
+            let tx = job_reg.as_ref().and_then(|reg| {
+                let account = require_program_account(&job_st).ok()?;
+                let built = build_register_region(&account, reg, &snap.registration(None));
+                Some(tx_json(&built, reg))
+            });
+            Ok(json!({
+                "region": snap.region,
+                "cid": snap.cid,
+                "version": snap.version,
+                "bytes": snap.bytes,
+                "md5": hex::encode(snap.checksum),
+                "path": snap.path.display().to_string(),
+                "tx": tx,
+            }))
+        });
+        return ok(json!({ "job_id": id, "op": "host", "region": region }));
+    }
     let c = client(&st);
     let snap = match block_on(c.host_region(&region)) {
         Ok(s) => s,
@@ -822,6 +977,30 @@ fn op_fetch(args: &Value) -> *mut c_char {
     let Some(st) = state_snapshot(args) else {
         return err("osm not open: call open first");
     };
+    // Job mode: fetching pulls the full region PBF from Logos Storage —
+    // minutes for big regions, which outruns the result channel. Same
+    // pattern as `host`: job id now, poll job_status for the outcome.
+    if args.get("job").and_then(|b| b.as_bool()).unwrap_or(false) {
+        let (jr, jc, jm) = (region.clone(), cid.clone(), checksum);
+        let job_st = st.clone();
+        let id = spawn_job("fetch", format!("fetch {jr}"), move || {
+            let c = client(&job_st);
+            let outcome = rt()
+                .block_on(c.fetch_snapshot(&jr, &jc, &jm))
+                .map_err(|e| format!("fetch {jr}: {e:#}"))?;
+            let summary = rt()
+                .block_on(c.import_local(&jr, &outcome.path))
+                .map_err(|e| format!("import {jr}: {e:#}"))?;
+            Ok(json!({
+                "region": summary.region,
+                "bytes": summary.bytes,
+                "blobs": summary.blobs,
+                "md5_verified": hex::encode(summary.md5),
+                "path": outcome.path.display().to_string(),
+            }))
+        });
+        return ok(json!({ "job_id": id, "op": "fetch", "region": region }));
+    }
     let c = client(&st);
     let outcome = match block_on(c.fetch_snapshot(&region, &cid, &checksum)) {
         Ok(o) => o,

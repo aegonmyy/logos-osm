@@ -1,9 +1,87 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-09-30** — the v0.3 port. The section below is current;
-> everything after the historical marker describes the pre-port state and is
-> kept for context only, including rules that no longer apply.
+> **Last updated: 2026-11-05** — the long-op result-delivery + Clear fix.
+> The section below is current; everything after the historical marker
+> describes the pre-port state and is kept for context only, including rules
+> that no longer apply.
+
+## 🤝 STATE AT HANDOFF (2026-11-05, post-1.3.4) — long ops report back
+
+The job work landed in the working tree (1.3.4's release shipped WITHOUT
+it) had one live bug that defeated the whole feature: the result channel
+silently dropped the running→done transition, so a host completed
+server-side (bytes stored, catalog updated, core idle) while the task
+stayed "running" for 20+ minutes and every op queued behind it starved.
+
+### Root cause (proven live via a wiretap of the app↔core socket)
+
+The QML→core transport delivers results as the `lastResult` **property**,
+and the generated `OsmAppSimpleSource::setLastResult` short-circuits on
+`QtPrivate::equalStrings` — a byte-identical value emits **no**
+`lastResultChanged`, so the QML `onLastResultChanged` handler never runs.
+While a job is `running`, `job_status` returned the identical JSON every
+poll, so after the 2nd poll the reply stopped reaching `onJobStatus`,
+`jobStatusInFlight` stuck `true`, and `pollJobs()` early-returned on every
+tick forever. The job finished at +6 s (catalog written) but the UI had
+already stopped asking — 2 polls total, then dead. Separately,
+`OsmAppPlugin::invokeCore` passes a 20 000 ms `Timeout` to
+`invokeRemoteMethod`, so any *sync* op whose reply takes >20 s is dropped
+outright (the original "task runs forever" symptom); the job path sidesteps
+this by returning a job id instantly, but it inherited the property-dedup
+deadlock on its polls.
+
+### The fix (Rust + QML)
+
+- **`osm-sdk/src/ffi.rs` — `op_job_status` now embeds `elapsed` (seconds
+  since `started_at`) in every reply.** While a job runs the reply now
+  differs poll-to-poll, so the property sync always emits and the poll
+  loop never stalls. The done/error payloads already differed (they carry
+  the full result), so only the running phase needed this. (+ clippy
+  `clone_on_copy` on `registrar` in the host job closure — `Option<AccountId>`
+  is `Copy`.)
+- **`app/src/qml/Main.qml` — `pollJobs()` re-arms on a deadline, not on the
+  result arriving.** A poll is "in flight" until its result lands OR 3 ticks
+  pass (a generous drop timeout — `job_status` is sub-millisecond
+  server-side); either way the next tick fires again. So a dropped/deduped
+  frame can no longer permanently stall the loop. `clearTasks()` resets the
+  deadline too. This is defense in depth on top of the `elapsed` fix; either
+  alone would do, both together tolerate any transport hiccup.
+- **`app/src/qml/Main.qml` — the region picker popup now opens downward
+  when there's no room above it, with its height clamped to the window.**
+  The popup is 400 px tall and hung at `y: -(height+8)` above its button;
+  on a 1280×800 screen the Host §02 button sits ~315 px down, so the popup's
+  filter field (and first rows) were clipped above the screen top — the
+  filter was unreachable and typing never landed. `place()` measures the
+  button's absolute position at `onOpened` and flips below / shrinks as
+  needed. All four pickers (Host + the three Consumer pickers) wire
+  `anchorItem` to their button.
+
+### Live verification (real Basecamp, VNC :99, wiretap on the socket)
+
+Hosted `china/jiangsu` (80 MB) end-to-end, three times, against the
+storage module's live libp2p node:
+
+- **Host → done with summary.** Polls fired every second (67 of them),
+  `elapsed` 0→35, state flipped `running`→`done` at +28–35 s with the full
+  result (`bytes`, `cid`). The task row resolved to
+  `china/jiangsu · zDvZRwzkzF… · 80 MB`. (Before the fix: 2 polls, then
+  dead; task "running" 21+ min.)
+- **Starvation test.** Fired `lookup_bulk` (72 regions) *during* a running
+  host: it delivered (`count:72, registered_count:25`) while `job_status`
+  polls kept flowing concurrently — the dispatcher is free because the host
+  runs as a job. (Before: the host blocked the dispatcher and the queued
+  lookup stuck — the user's "registry check stuck on the PC while a host
+  ran".)
+- **Clear mid-host.** Clicked Clear while a host polled: the task list
+  emptied (chip → `idle`), job polling stopped (0 `job_status` frames
+  afterward), and the host still completed server-side (catalog updated
+  at +12 s) — its bytes land regardless; Clear only stops the UI tracking.
+
+`cargo test -p logos-osm --lib`: 42 passed, 1 ignored. `cargo clippy`:
+0 warnings. **Not yet shipped** — awaiting the user's go (their rule).
+
+---
 
 ## 🤝 STATE AT HANDOFF (2026-11-04, v1.3.4) — UX overhaul
 
