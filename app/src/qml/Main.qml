@@ -1377,7 +1377,10 @@ Item {
                 Popup {
                     id: tasksPanel
                     x: tasksChip.width - width
-                    y: -(height + 8)
+                    // Open DOWNWARD: the chip lives in the header near the
+                    // top of the window, so the picker's upward placement
+                    // would fly off-screen.
+                    y: tasksChip.height + 8
                     width: 440
                     height: 380
                     padding: 1
