@@ -278,9 +278,17 @@ Two changes landed on `main` today (v1.1.0):
    Verified live end-to-end (chain lookup through the GUI) in the demo
    environment on 2026-11-01.
 
-Release flow for the catalog: bump the `submodules/logos-osm` pointer in
-`aegonmyy/logos-modules-release-base`, then dispatch
-`release-logos-osm.yml` / `release-logos-osm-app.yml` (workflow_dispatch).
+Release flow for the catalog (UPDATED 2026-11-05): the release repo is now
+**`ameenme/logos-modules-release-base`** (public; mirrored from aegonmyy
+after the aegonmyy account hit the GitHub Actions billing gate — HTTP 422
+"Actions disabled" on dispatch, in-flight runs cancelled; the burn is the
+darwin-arm64 macOS legs at 10x billing plus private-repo minutes). Bump the
+`submodules/logos-osm` pointer there, then dispatch
+`release-logos-osm.yml` / `release-logos-osm-app.yml` with the ameenme
+token. logos-repo.json's indexUrl points at the ameenme repo; the catalog
+publishes unsigned (signing_mode none — no Actions secrets configured).
+The aegonmyy mirror still serves releases through v1.3.3; aegonmyy git
+pushes work fine, only its Actions are gated.
 
 ## 🤝 STATE AT HANDOFF (2026-09-30) — read this first
 
