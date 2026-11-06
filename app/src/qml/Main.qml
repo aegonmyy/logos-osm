@@ -41,8 +41,8 @@ Item {
     // below parses lastResult when it changes and routes it.
     property string pendingOp: ""
     // Region picker state: the frozen set with live sizes (fetched after
-    // startup), the picker's selection, and the locally hosted set (from the
-    // catalog op) for the ever-valid "host all".
+    // startup), the picker's selection, and the locally fetched set (from the
+    // catalog op) for the ever-valid "fetch all".
     property var    regionList: []          // [{path, name, level}]
     property var    regionSizes: ({})       // {path: bytes}
     property bool   sizesLoading: false
@@ -114,6 +114,9 @@ Item {
     property int hostBytes: 0           // bytes stored so far this run
     property string hostCurrent: ""     // region whose host op is in flight
     property int hostTaskId: -1         // the grouped task's id
+    property var hostRunRegions: []     // regions fetched this run (post-run registry check)
+    property var hostRunCheck: []       // regions in the post-run lookup_bulk; reply finalizes the group row
+    property var lastRunPending: []     // fetched-but-unregistered regions; drives the "Finish on-chain" card
 
     // Background jobs: long ops (host, fetch) outrun the RemoteObjects
     // result channel — anything past roughly a minute is silently dropped —
@@ -388,8 +391,8 @@ Item {
     function taskLabel(op, args) {
         const region = args && args.region ? args.region : ""
         switch (op) {
-            case "host":     return region ? "host " + region : "host"
-            case "fetch":    return region ? "fetch " + region : "fetch"
+            case "host":     return region ? "fetch " + region : "fetch"
+            case "fetch":    return region ? "restore " + region : "restore"
             case "import":   return region ? "import " + region : "import"
             case "update":   return region ? "update " + region : "update"
             case "lookup":   return region ? "lookup " + region : "lookup"
@@ -401,7 +404,7 @@ Item {
             }
             case "register": return region ? "register " + region : "register"
             case "register_bulk": return "register batch"
-            case "host_bulk":     return "host bulk"
+            case "host_bulk":     return "fetch bulk"
             case "sizes": {
                 const n = root.regionList.length > 0 ? root.regionList.length : root.regionsTotal
                 return "sizes (" + n + " regions)"
@@ -414,9 +417,19 @@ Item {
     function taskSummary(op, r, t) {
         const res = r.result || {}
         switch (op) {
-            case "host":
-                return (res.region || "") + " · " + String(res.cid || "").substring(0, 10)
+            case "host": {
+                // On device · stored · (not) registered: joining the local
+                // facts with the on-chain status makes the registration gap
+                // visible right in the row ("on Logos" needs the wallet tx).
+                const region = res.region || ""
+                const st = root.regionStatuses[region]
+                const onchain = st && st.registered === true
+                              ? "registered ✓"
+                              : (st && st.error ? "registry?" : "not registered")
+                return region + " · " + String(res.cid || "").substring(0, 10)
                      + (res.bytes !== undefined ? "… · " + root.fmtBytes(res.bytes) : "")
+                     + " · " + onchain
+            }
             case "sizes":
                 return (res.count !== undefined ? res.count : "?") + " regions · "
                      + (res.total_bytes !== undefined ? root.fmtBytes(res.total_bytes) : "?")
@@ -477,9 +490,10 @@ Item {
         root.hostDoneCount = 0
         root.hostBytes = 0
         root.hostCurrent = ""
+        root.hostRunRegions = []
         root.hostLoopActive = true
         root.hostTaskId = root.addTask("host-run",
-            "host " + regions.length + (regions.length > 1 ? " regions" : " region"))
+            "fetch " + regions.length + (regions.length > 1 ? " regions" : " region"))
         root.hostNext()
     }
 
@@ -558,6 +572,12 @@ Item {
         return null
     }
 
+    function taskById(id) {
+        for (let i = 0; i < root.tasks.length; i++)
+            if (root.tasks[i].id === id) return root.tasks[i]
+        return null
+    }
+
     // A job_status result: resolve the attached task when the job finished;
     // host jobs also advance the sequential loop. While running, the reply
     // can carry live byte progress (host download/store, fetch) — surface it
@@ -594,7 +614,7 @@ Item {
             if (entry.host) root.onHostJobDone(j.result || {})
         } else {
             if (task) root.updateTask(task.id, { state: "error", summary: j.error || "failed" })
-            if (entry.host) root.onHostJobError(j.error || "host failed")
+            if (entry.host) root.onHostJobError(j.error || "fetch failed")
         }
     }
 
@@ -602,8 +622,9 @@ Item {
         if (!root.hostLoopActive) return
         root.hostDoneCount++
         root.hostBytes += (res.bytes || 0)
+        if (res.region) root.hostRunRegions = root.hostRunRegions.concat([res.region])
         root.updateTask(root.hostTaskId, {
-            summary: "hosting " + root.hostDoneCount + "/" + root.hostTotal
+            summary: "fetching " + root.hostDoneCount + "/" + root.hostTotal
                    + " · " + (res.region || root.hostCurrent) + " ✓ · "
                    + root.fmtBytes(root.hostBytes) + " so far"
         })
@@ -611,11 +632,13 @@ Item {
             root.hostLoopActive = false
             root.updateTask(root.hostTaskId, {
                 state: "done",
-                summary: root.hostDoneCount + " hosted · " + root.fmtBytes(root.hostBytes)
+                summary: root.hostDoneCount + " fetched · " + root.fmtBytes(root.hostBytes)
+                       + " · verifying on-chain…"
             })
             // The run changed the catalog; refresh it for Consumer's "use
-            // cached file". job_status just returned, so the dispatcher is
-            // free and the call is safe.
+            // cached file", then re-check the on-chain registry for the
+            // regions just fetched so their "registered" status is fresh.
+            // job_status just returned, so the dispatcher is free.
             root.call("catalog", {}, "catalog-list")
         } else {
             root.hostNext()
@@ -654,7 +677,7 @@ Item {
             root.hostDoneCount++
             root.hostBytes += (r.result.bytes || 0)
             root.updateTask(root.hostTaskId, {
-                summary: "hosting " + root.hostDoneCount + "/" + root.hostTotal
+                summary: "fetching " + root.hostDoneCount + "/" + root.hostTotal
                        + " · " + (r.result.region || root.hostCurrent) + " ✓ · "
                        + root.fmtBytes(root.hostBytes) + " so far"
             })
@@ -662,7 +685,7 @@ Item {
                 root.hostLoopActive = false
                 root.updateTask(root.hostTaskId, {
                     state: "done",
-                    summary: root.hostDoneCount + " hosted · " + root.fmtBytes(root.hostBytes)
+                    summary: root.hostDoneCount + " fetched · " + root.fmtBytes(root.hostBytes)
                 })
                 // The run just changed the catalog (the host op records each
                 // hosted region): refresh it so "use cached file" in Consumer
@@ -749,6 +772,15 @@ Item {
                 root.catalogRecords = []
                 root.hostedRegions = []
             }
+            // A fetch run just refreshed the catalog: now re-check the
+            // on-chain registry for the fetched regions so their
+            // "registered" badges (and the run summary) are fresh. One
+            // batched call; the reply finalizes the group task row.
+            if (root.hostRunRegions.length > 0 && root.hostTaskId >= 0) {
+                root.hostRunCheck = root.hostRunRegions.slice()
+                root.hostRunRegions = []
+                root.call("lookup_bulk", { regions: root.hostRunCheck.join(",") })
+            }
         } else if (op === "host") {
             if (r.ok && r.result && r.result.job_id) {
                 // Job dispatch ack: attach the poll to the running task.
@@ -782,6 +814,35 @@ Item {
                 for (const k in r.result.statuses) merged[k] = r.result.statuses[k]
                 root.regionStatuses = merged
                 root.rebuildRegionModel()
+            }
+            // Finalize the fetch-run group row with the on-chain verdict:
+            // "N fetched · X · M/K registered" — M < K means the CLI wallet
+            // registration step is still pending (the Regions tab badges
+            // carry the per-region detail).
+            if (root.hostRunCheck.length > 0 && root.hostTaskId >= 0) {
+                let reg = 0
+                for (let i = 0; i < root.hostRunCheck.length; i++) {
+                    const s = root.regionStatuses[root.hostRunCheck[i]]
+                    if (s && s.registered === true) reg++
+                }
+                const gt = root.taskById(root.hostTaskId)
+                if (gt && gt.state === "done") {
+                    root.updateTask(root.hostTaskId, {
+                        summary: root.hostDoneCount + " fetched · "
+                               + root.fmtBytes(root.hostBytes) + " · "
+                               + reg + "/" + root.hostRunCheck.length
+                               + (reg < root.hostRunCheck.length
+                                  ? " registered — finish with the CLI wallet"
+                                  : " registered ✓")
+                    })
+                }
+                // The card under the fetch buttons: every region still
+                // needing its wallet-signed registration transaction.
+                root.lastRunPending = root.hostRunCheck.filter(p => {
+                    const s = root.regionStatuses[p]
+                    return !(s && s.registered === true)
+                })
+                root.hostRunCheck = []
             }
         } else if (op === "lookup") {
             root.onFetchLookupResult(r)
@@ -876,7 +937,7 @@ Item {
     readonly property color cTan:      "#e2e0c9"                            // accent tan — secondary surfaces
     readonly property color cTeal:     "#5f797c"                            // steel teal — muted accents
     readonly property color cInfo:     "#c6ebf7"                            // light blue — info, links
-    readonly property color cBrown:    "#a18863"                            // brown — "not hosted" status
+    readonly property color cBrown:    "#a18863"                            // brown — error / read-failed status
     // Validation/reachability tones, kept quiet on the dark-green canvas:
     // amber for "fixable wrong", soft green for confirmed, soft red for
     // unreachable. Derived from the same saturation band as cTeal/cBrown.
@@ -1832,7 +1893,7 @@ Item {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 spacing: 8
-                TabBtn { tabIndex: 0; label: "Host / Registrar" }
+                TabBtn { tabIndex: 0; label: "Fetch / Registrar" }
                 TabBtn { tabIndex: 1; label: "Regions" }
                 TabBtn { tabIndex: 2; label: "Consumer" }
                 TabBtn { tabIndex: 3; label: "Guide" }
@@ -1877,7 +1938,7 @@ Item {
                         numeral: "01"
                         heading: "Connect"
                         Hint {
-                            text: "Open wires the host: Logos Storage (Codex) for blobs, Geofabrik as the source, and a local cache directory."
+                            text: "Open wires this machine: Logos Storage (Codex) for blobs, Geofabrik as the source, and a local cache directory."
                         }
                         GridLayout {
                             columns: 2
@@ -1949,11 +2010,11 @@ Item {
                         }
                     }
 
-                    // -- Host --
+                    // -- Fetch --
                     Section {
                         id: secHost
                         numeral: "02"
-                        heading: "Host (download → verify MD5 → Logos Storage)"
+                        heading: "Fetch (Geofabrik → verify MD5 → your storage node)"
 
                     // Selected regions as pinned chips with × to cancel.
                     Flow {
@@ -2032,7 +2093,7 @@ Item {
                             text: {
                                 const sel = root.selectedRegions
                                 const bytes = root.bytesOf(sel)
-                                return "Host selected  (" + sel.length + " · " +
+                                return "Fetch selected  (" + sel.length + " · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
                             onClicked: root.startHostRun(root.selectedRegions)
@@ -2045,7 +2106,7 @@ Item {
                                 const all = root.regionList.map(g => g.path)
                                 const keep = all.filter(p => root.selectedRegions.indexOf(p) < 0)
                                 const bytes = root.bytesOf(keep)
-                                return "Host all except selected  (" + keep.length +
+                                return "Fetch all except selected  (" + keep.length +
                                        (bytes ? " · " + root.fmtBytes(bytes) : "") + ")"
                             }
                             onClicked: root.startHostRun(
@@ -2060,12 +2121,99 @@ Item {
                                 const all = root.regionList.map(g => g.path)
                                 const todo = all.filter(p => root.hostedRegions.indexOf(p) < 0)
                                 const bytes = root.bytesOf(todo)
-                                return "Host all  (" + todo.length + " new · " +
+                                return "Fetch all  (" + todo.length + " new · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
                             onClicked: root.startHostRun(
                                 root.regionList.map(g => g.path)
                                     .filter(p => root.hostedRegions.indexOf(p) < 0))
+                        }
+                    }
+
+                    // Finish on-chain: a fetch puts bytes on your device +
+                    // storage node, NOT on the chain. The registration
+                    // transaction needs a wallet that signs LEZ txs — the app
+                    // never holds keys. This card surfaces the exact CLI
+                    // command per fetched-but-unregistered region, the wallet
+                    // install guide, and a one-click registry re-check.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: root.lastRunPending.length > 0
+                        color: Qt.rgba(0.776, 0.922, 0.969, 0.10)
+                        border.width: 1
+                        border.color: root.cHair
+                        radius: 6
+                        implicitHeight: cardCol.implicitHeight + 20
+                        ColumnLayout {
+                            id: cardCol
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
+                            Text {
+                                Layout.fillWidth: true
+                                text: "Finish on-chain — " + root.lastRunPending.length
+                                      + (root.lastRunPending.length > 1 ? " regions" : " region")
+                                      + " fetched but not registered"
+                                font.family: root.fSerif
+                                font.pixelSize: 14
+                                color: root.cInk
+                                wrapMode: Text.Wrap
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: "Fetching stores bytes on your device + storage node; the chain learns about a region only when a wallet-signed registration transaction is submitted. Copy the command for each region, run it in the LEZ wallet CLI, then re-check."
+                                font.family: root.fSans
+                                font.pixelSize: 11
+                                color: root.cMuted
+                                wrapMode: Text.Wrap
+                                lineHeight: 1.4
+                                lineHeightMode: Text.ProportionalHeight
+                            }
+                            Repeater {
+                                model: root.lastRunPending
+                                delegate: RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    // Selectable mono field so the user can
+                                    // select+copy the exact command (no
+                                    // clipboard bridge exposed by the plugin).
+                                    TextField {
+                                        Layout.fillWidth: true
+                                        readOnly: true
+                                        selectByMouse: true
+                                        font.family: root.fMono
+                                        font.pixelSize: 11
+                                        color: root.cTan
+                                        text: "osm register " + modelData
+                                              + " --registrar "
+                                              + (registrar.text.trim().length === 64
+                                                 ? registrar.text.trim()
+                                                 : "<64-hex>")
+                                        background: Item {}
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 12
+                                Text {
+                                    text: "<a href=\"https://docs.logos.co/lez/get-started/run-lez-wallet-via-cli\">How to install the LEZ wallet</a>"
+                                    textFormat: Text.RichText
+                                    font.family: root.fSans
+                                    font.pixelSize: 11
+                                    color: root.cInfo
+                                    onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                                }
+                                Item { Layout.fillWidth: true }
+                                SButton {
+                                    text: "re-check registry"
+                                    onClicked: root.call("lookup_bulk", {
+                                        regions: root.lastRunPending.join(",")
+                                    })
+                                }
+                            }
                         }
                     }
                     }
@@ -2327,7 +2475,7 @@ Item {
                     Section {
                         id: secFetch
                         numeral: "01"
-                        heading: "Fetch a registered snapshot (storage → verify → import)"
+                        heading: "Restore a registered snapshot (storage → verify → import)"
 
                         Rectangle {
                             visible: root.fetchRegion !== ""
@@ -2428,7 +2576,7 @@ Item {
                             PButton {
                                 enabled: root.fetchRegion !== "" && !root.longJobBusy
                                 opacity: enabled ? 1.0 : 0.4
-                                text: "Fetch + import"
+                                text: "Restore + import"
                                 onClicked: root.call("fetch", {
                                     region: root.fetchRegion,
                                     cid: fCid.text.trim(),

@@ -65,25 +65,30 @@ module can produce a wrong transaction; it cannot produce a signature.`
 
 },
     "hosting": {
-        title: "Hosting regions",
-        body: `# Hosting regions
+        title: "Fetching regions to your node",
+        body: `# Fetching regions to your node
 
-The Host tab turns your machine into a source of map data for the
-network. Three steps: connect, pick, host.
+The Fetch tab pulls map data from Geofabrik onto your machine and into
+your storage node. Three steps: connect, pick, fetch.
+
+**This is not yet "on Logos".** Fetching puts verified bytes on your
+device and your storage node under their content ID — the chain learns
+about them only when a registration transaction is signed and submitted
+(see Registering regions on-chain).
 
 ## Connect
 
 The four fields say where the pieces live:
 
 - **Storage URL** — your Logos Storage node. The default points at a
-  local one (http://127.0.0.1:8080). Hosted blobs land here, and this is
+  local one (http://127.0.0.1:8080). Fetched blobs land here, and this is
   what your node serves to others.
 - **Geofabrik URL** — where the region files download from. Leave the
   default unless you run a mirror.
-- **Cache dir** — where downloaded files stay on disk, so re-hosting and
+- **Cache dir** — where downloaded files stay on disk, so re-fetching and
   verifying skip the network.
 - **Registrar** — your account ID (64 hex characters), used when you ask
-  for a registration transaction. Find it in your wallet app under
+  for a registration transaction. Find it in your wallet under
   account details.
 
 The dot next to STORAGE goes green when your storage node answers the
@@ -96,37 +101,39 @@ region's current download size. Selected regions pin as chips with an
 × to remove. The set is frozen at 72 regions — countries plus the US
 states.
 
-## The three host actions
+## The three fetch actions
 
-Each button hosts regions one at a time, so the tasks panel shows
-per-region progress:
+Each button fetches regions one at a time, so the tasks panel shows
+per-region progress (download bytes, then store bytes):
 
-- **Host selected** — exactly the pinned regions.
-- **Host all except selected** — the rest of the set.
-- **Host all** — every region your node has not hosted yet.
+- **Fetch selected** — exactly the pinned regions.
+- **Fetch all except selected** — the rest of the set.
+- **Fetch all** — every region your node does not have yet.
 
-Hosting one region means: download from Geofabrik, verify the bytes
+Fetching one region means: download from Geofabrik, verify the bytes
 against Geofabrik's published MD5, store them in Logos Storage, and
 record the snapshot in the local catalog.
 
-## What "hosted" means for your node
+## What "fetched" means for your node
 
-After a region hosts, your storage node holds that region's bytes under
+After a region fetches, your storage node holds that region's bytes under
 their CID. Anyone who knows the CID (from the registry, or from you) can
 fetch them from your node. Your cache dir keeps the original file so a
-re-verify or re-store never re-downloads.`
+re-verify or re-store never re-downloads. The region counts as registered
+on-chain only after the wallet-signed registration transaction goes
+through.`
 
 },
     "fetching": {
-        title: "Fetching maps",
-        body: `# Fetching maps
+        title: "Restoring registered snapshots",
+        body: `# Restoring registered snapshots
 
 The Consumer tab is the reader's side: get a region's map data into your
 local catalog, verified.
 
 ## Pick a region
 
-"Select region" opens the same region list as the Host tab — one choice,
+"Select region" opens the same region list as the Fetch tab — one choice,
 not a basket. Your pick pins as a chip showing the region and its
 download size.
 
@@ -144,7 +151,7 @@ region has no registration, and "registry unreachable — enter manually"
 when the chain read failed (the fields stay editable so you can paste
 values from a friend or from \`osm lookup\` output).
 
-## Fetch + import
+## Restore + import
 
 The button downloads the bytes from Logos Storage, checks them against
 the registered MD5, and imports the region into your local catalog. A
@@ -154,7 +161,7 @@ checksum mismatch stops the import — you never get unverified data.
 
 Already have the file on disk (from Geofabrik directly, or a copy)?
 Pick the region and point at the file. "Use cached file" appears when
-that region's hosted copy already sits in your cache dir — one click
+that region's fetched copy already sits in your cache dir — one click
 fills the path. **Import (validate + catalog)** checks the file's
 structure and catalogs it. **Verify + store + register tx** additionally
 checks it against Geofabrik's published MD5, stores it in Logos Storage,
@@ -179,7 +186,10 @@ prints a transaction as JSON — your wallet signs and submits it.
 
 - The \`osm\` binary built from this repository (cargo build -p
   logos-osm-cli).
-- A wallet that can sign and submit LEZ transactions.
+- A wallet that can sign and submit LEZ transactions. Install and set up
+  the LEZ wallet — see the official guide:
+  https://docs.logos.co/lez/get-started/run-lez-wallet-via-cli (CLI) or
+  https://docs.logos.co/lez/get-started/run-lez-wallet-app-initiate-native-token-transfers (Basecamp app).
 - A Logos Storage node reachable at a URL (\`--storage-url\`).
 
 ## A funded account
@@ -213,14 +223,14 @@ stays open to anyone):
 
 Prints the Init transaction JSON for the wallet.
 
-## Host regions
+## Fetch regions
 
-Registration files what you actually stored, so host first:
+Registration files what you actually stored, so fetch first:
 
     osm host germany --registrar <64-hex>
     osm host-bulk --regions germany,france,denmark
 
-Each host downloads, verifies against Geofabrik's MD5, stores in Logos
+Each fetch downloads, verifies against Geofabrik's MD5, stores in Logos
 Storage, and catalogs the snapshot locally.
 
 ## Register

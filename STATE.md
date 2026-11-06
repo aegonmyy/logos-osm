@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-05** — live byte progress for host/fetch + one-job-at-a-time.
+> **Last updated: 2026-11-05** — Host→Fetch reframe + on-chain status chips + CLI wallet bridge.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
@@ -193,6 +193,93 @@ where the one-off module segfault earlier landed. Now defended at two layers:
 `cargo test -p logos-osm --lib`: 42 passed, 1 ignored. `cargo clippy`: 0
 warnings. New file `osm-sdk/src/progress.rs`; edits in `geofabrik.rs`,
 `storage.rs`, `osm.rs`, `ffi.rs`, `lib.rs`, `app/src/qml/Main.qml`.
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-05) — Host→Fetch reframe + on-chain bridge
+
+### 1. Naming: "Host" → "Fetch", Consumer "Fetch" → "Restore"
+
+The "Host" operation never put a region on the chain — it downloads from
+Geofabrik and stores bytes on your device + your storage node. On-chain
+availability requires a wallet-signed registration transaction (CLI wallet
+only). So the UI now names the operation for what it does:
+
+- Tab `Host / Registrar` → `Fetch / Registrar`; §02 head
+  `Host (download → verify MD5 → Logos Storage)` →
+  `Fetch (Geofabrik → verify MD5 → your storage node)`.
+- Buttons `Host selected / Host all except selected / Host all` →
+  `Fetch selected / Fetch all except selected / Fetch all`.
+- Consumer §01 `Fetch a registered snapshot…` → `Restore a registered snapshot…`;
+  button `Fetch + import` → `Restore + import`.
+- Task labels: `host china/jiangsu` → `fetch china/jiangsu`; the loop's
+  group task `host N regions` → `fetch N regions`; progress
+  `hosting 1/3` → `fetching 1/3`; done `N hosted` → `N fetched`.
+- Guide docs retitled: "Hosting regions" → "Fetching regions to your node"
+  (reframed: "this is not yet on Logos"); "Fetching maps" →
+  "Restoring registered snapshots"; register-onchain doc's "Host regions"
+  step → "Fetch regions".
+- `metadata.json` description reworded accordingly.
+
+**Op names unchanged** (`host`, `fetch`, `register`, `host-run`): the CLI,
+`.rep`, FFI, and state file are untouched — this is UI labels + docs only.
+Zero behavior change.
+
+### 2. Status clarity: on device vs registered
+
+After a fetch resolves, the per-region task row joins the local facts with
+the on-chain status: `china/jiangsu · zDvZRwzkzF… · 80 MB · not registered`
+(or `registered ✓` when the registry confirms). The Regions tab badges
+(already driven by `lookup_bulk`) stay the single source of truth for
+"is it on Logos"; the row just surfaces both facts so the gap is visible.
+
+A fetch run now also auto-rechecks the on-chain registry for the regions it
+fetched (one batched `lookup_bulk` after the catalog refresh), and the
+group task row finalizes to `1 fetched · 80 MB · 0/1 registered — finish
+with the CLI wallet` (or `…/K registered ✓`).
+
+### 3. CLI wallet bridge: don't assume a wallet exists
+
+A "Finish on-chain" card appears under the Fetch buttons whenever a fetch
+run left regions unregistered. It states plainly that the chain learns
+about a region only via a wallet-signed registration tx, then offers, per
+region, a **selectable copy-paste command**:
+`osm register china/jiangsu --registrar <64-hex>` (the registrar hex
+auto-fills from the Connect field when present; `<64-hex>` placeholder
+otherwise — the app builds the tx, the wallet signs; the app never holds
+keys). It links out to the official Logos wallet install guide:
+`https://docs.logos.co/lez/get-started/run-lez-wallet-via-cli` (CLI) and
+`…/run-lez-wallet-app-initiate-native-token-transfers` (Basecamp app), and
+has a **re-check registry** button that fires `lookup_bulk` for the pending
+regions (read-only, no keys) so the chips refresh after the user runs the
+CLI — closing the loop without the app ever holding a key.
+
+### Verification (real Basecamp, VNC — confirmed by user)
+
+Rename rendered live (`Fetch / Registrar` tab, `Fetch (Geofabrik → verify
+MD5 → your storage node)` head, the three Fetch buttons, Consumer
+`Restore…`). A `china/jiangsu` fetch (an unregistered region) produced the
+task row `…· 80 MB · not registered`, the group row
+`1 fetched · 80 MB · 0/1 registered — finish with the CLI wallet`, and the
+Finish-on-chain card with `osm register china/jiangsu --registrar <64-hex>`
++ the wallet link + re-check button.
+
+No Rust touched this round (labels/docs/UI only); `cargo`/`clippy` baseline
+unchanged (42/1/0). Edits: `app/src/qml/Main.qml`,
+`app/src/qml/guide/GuideDocs.js`, `app/metadata.json`. QML braces 520/520,
+parens 700/700.
+
+### Aside: web_search in this harness
+
+`web_search` is unavailable here — it needs a `DEEPSEEK_API_KEY` (or a
+DeepSeek account sign-in), and this session routes chat through the
+`surplus-claude` gateway (`glm-5.2`), so neither credential exists. The
+surplus gateway accepts the `web_search_20250305` tool but runs it
+client-side (returns `tool_use`, no `web_search_tool_result` blocks), so it
+cannot substitute. **`web_fetch` works keyless** and was used to find the
+Logos docs (`docs.logos.co/lez`). Fix for `web_search`: add a real
+DeepSeek API key to `~/.dsh/.env` as `DEEPSEEK_API_KEY` (or the GUI Web
+Models page) — deferred, not blocking the OSM work.
 
 ---
 
