@@ -103,6 +103,14 @@ struct AppState {
     program_account_hex: String,
     /// LEZ sequencer JSON-RPC endpoint, read by the `lookup` op.
     sequencer_url: String,
+    /// The registrar account id (64-hex) used when building registration
+    /// transactions. Persisted so the app can re-seed the Connect field after
+    /// a restart instead of asking the user to re-paste it every session.
+    /// Empty when unset; tx-building ops still take a per-call `registrar_hex`
+    /// arg (the app passes the field's current value), so this is purely a
+    /// convenience cache, never authoritative.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    registrar_hex: String,
     /// Last-known region PBF sizes (bytes). Cached so the app can render the
     /// picker instantly and refresh in the background.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -639,6 +647,7 @@ fn op_open(args: &Value) -> *mut c_char {
         program_account_hex: String::new(),
         sequencer_url: str_arg(args, "sequencer_url")
             .unwrap_or_else(|| "https://testnet.lez.logos.co".to_string()),
+        registrar_hex: String::new(),
         region_sizes: std::collections::BTreeMap::new(),
         region_statuses: std::collections::BTreeMap::new(),
         state_path: state_path.clone(),
@@ -668,6 +677,15 @@ fn op_open(args: &Value) -> *mut c_char {
         }
         st.program_account_hex = v;
     }
+    // The registrar id is optional but, when given, must be a well-formed
+    // 64-hex account id — refuse to persist a typo that would then poison
+    // every later registration the app pre-fills from state.
+    if let Some(v) = str_arg(args, "registrar_hex").filter(|s| !s.is_empty()) {
+        if let Err(e) = account_from_hex(&v) {
+            return err(format!("registrar_hex: {e}"));
+        }
+        st.registrar_hex = v;
+    }
     st.state_path = state_path;
     let _ = std::fs::create_dir_all(&st.cache_dir);
     let summary = json!({
@@ -676,6 +694,7 @@ fn op_open(args: &Value) -> *mut c_char {
         "cache_dir": st.cache_dir,
         "memory_storage": st.memory,
         "program_account_hex": st.program_account_hex,
+        "registrar_hex": st.registrar_hex,
         "catalog": client(&st).catalog().len(),
         // Cached region sizes so the app can render the picker before the
         // live `sizes` refresh completes (empty until the first fetch).

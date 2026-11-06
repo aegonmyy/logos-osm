@@ -204,7 +204,26 @@ impl Storage for CodexStorage {
                 .send()
                 .await
                 .map_err(|e| {
-                    RetryErr::Transient(anyhow::anyhow!("POST /api/storage/v1/data: {e}"))
+                    // A connection failure here almost always means no Logos
+                    // Storage node is running at the configured URL — the file
+                    // already downloaded to the cache; this step uploads it to
+                    // the storage node so others can fetch it by CID. Surface
+                    // that plainly instead of reqwest's opaque "error sending
+                    // request for url".
+                    if e.is_connect() {
+                        RetryErr::Fatal(anyhow::anyhow!(
+                            "Logos Storage node at {} did not respond — is a \
+                             storage node running there? (the file downloaded \
+                             fine; this step uploads it to the storage node)",
+                            self.base
+                        ))
+                    } else if e.is_timeout() {
+                        RetryErr::Transient(anyhow::anyhow!(
+                            "storage node timed out during PUT: {e}"
+                        ))
+                    } else {
+                        RetryErr::Transient(anyhow::anyhow!("POST /api/storage/v1/data: {e}"))
+                    }
                 })?;
             let status = resp.status();
             if !status.is_success() {

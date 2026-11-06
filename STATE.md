@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-05** — Host→Fetch reframe + on-chain status chips + CLI wallet bridge.
+> **Last updated: 2026-11-06** — explicit edit/save (✎→✓) for every persistent Connect field + real persistence (registrar now saved; boot-wipe fixed).
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
@@ -280,6 +280,111 @@ cannot substitute. **`web_fetch` works keyless** and was used to find the
 Logos docs (`docs.logos.co/lez`). Fix for `web_search`: add a real
 DeepSeek API key to `~/.dsh/.env` as `DEEPSEEK_API_KEY` (or the GUI Web
 Models page) — deferred, not blocking the OSM work.
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-06) — storing-error readability + local demo guide
+
+### The "storing" failure (no storage node) made readable
+
+On a PC running only Basecamp (no Logos Storage node), a fetch downloads
+fine (file in the cache dir) then fails at the store step — PUT to
+`storage_url` (default `http://127.0.0.1:8080`) gets connection-refused.
+The old error was an opaque one-liner that the task panel truncated
+(`host china/henan: storing china/henan in Logos Storage: POST
+/api/storage/v1/data: error sending request for url (…)`), unreadable
+because the panel scrolls vertically only.
+
+Two fixes:
+
+- **Rust** (`osm-sdk/src/storage.rs`, `put_file`): a connection failure
+  (`reqwest` `is_connect()`) now surfaces as a clear, actionable message
+  instead of the raw "error sending request for url":
+  `Logos Storage node at <url> did not respond — is a storage node running
+  there? (the file downloaded fine; this step uploads it to the storage
+  node)`. Timeouts and other send errors keep their original wording.
+- **QML** (`Main.qml`, task panel row): the summary `Text` now **wraps**
+  (up to 3 lines) instead of eliding off the right edge, and the row
+  height grows to fit; the full text is also in the row's tooltip. So a
+  long error reads in full without horizontal scrolling.
+
+Reproduced and verified via ctypes against a dead storage port: the job
+errors with the new message above. `cargo test -p logos-osm --lib`:
+42 passed, 1 ignored; `cargo clippy`: 0 warnings.
+
+### Local demo setup guide
+
+New `docs/LOCAL_DEMO_SETUP.md` — how to run the full fetch → store →
+register → verify round-trip on a personal PC for demo (the heavy 60 GB
+region set stays on the codespace). Covers: the Logos Storage node (runs
+as an app inside Basecamp, no separate binary), the LEZ wallet CLI
+(`cargo install --path lez/wallet` from the LEZ repo, `wallet
+change-network testnet`), the `osm` CLI (`cargo build -p logos-osm-cli`
+from this repo), and a disk estimate (≈ 3–4 GB for a one-region demo).
+Links the official Logos docs throughout.
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-06) — explicit edit/save for every persistent field
+
+### The "does it actually save?" question
+
+The Connect fields (Storage URL, Geofabrik URL, Cache Dir, Registrar) all
+feed the `open` op, which persists them to the state file. But two gaps
+made that invisible (and one was a real bug):
+
+1. **No affordance** — the fields were always-editable TextFields with no
+   save button; editing one did nothing until an app restart, and there was
+   no confirmation it took. The user couldn't tell a change persisted.
+2. **Boot-wipe** — `openArgs()` always passed the fields' *placeholder
+   default* text at startup, so `open` loaded the saved state and then
+   *overwrote* it with the defaults. A customized Storage URL or Geofabrik
+   URL was silently lost on the next restart. (Cache Dir escaped this only
+   because it was guarded to skip the `osm-cache` placeholder.)
+3. **Registrar never persisted** — `AppState` had no `registrar_hex` field,
+   so the account id you pasted was gone after a restart.
+
+### The fix
+
+**Rust** (`osm-sdk/src/ffi.rs`):
+- `AppState` gains `registrar_hex: String` (`#[serde(default,
+  skip_serializing_if = "String::is_empty")]` — old state files still load).
+- `op_open` validates + persists `registrar_hex` when given (a malformed id
+  is rejected with `registrar_hex: …`, same as `program_account_hex`), and
+  the open summary now returns `registrar_hex` so the app can re-seed the
+  field.
+- The summary already returned `storage_url`/`geofabrik_url`/`cache_dir`;
+  the app just wasn't reading them.
+
+**QML** (`app/src/qml/Main.qml`):
+- `openArgs(withConfig)`: the **boot** call passes `false` — no user config,
+  so the saved state loads untouched; a **save** passes `true` with the
+  edited values, guarded so empty strings never overwrite a saved value
+  (and the cache-dir placeholder `osm-cache` still pins nothing).
+- `onOpResult("open")` now **seeds all four fields** from the result — the
+  persistence round-trip is visible: whatever `open` loaded (and, for a
+  save, just wrote) is displayed. A saved edit comes back; at boot the saved
+  values fill the fields.
+- New `PersistField` component: each persistent field is a **read-only
+  value display** with a ✎ button at its right; clicking ✎ makes it
+  editable and shows ✓ (save) + ✕ (revert). ✓ re-fires `open` (one reconnect
+  persists the whole form), the result seeds the fields back, and a
+  `✓ saved` flash appears beside each. MonoField gained a flatter
+  `readOnly` style; `GlyphButton` is a plain Item+Rectangle+MouseArea (not
+  a Control) so its 26×26 box lays out and clicks reliably. Applied to all
+  four Connect fields uniformly.
+- A user-save keeps the Connect section open (so the `✓ saved` flash is
+  visible); the auto-open still folds it away.
+
+### Verification (real Basecamp, VNC — confirmed by user)
+
+✎ renders beside all four fields; clicking ✎ → editable + ✓/✕; clicking ✓
+reconnects (storage dot blinks) + `✓ saved` flash (user-confirmed). Boot-
+seeding verified: after a restart, Cache Dir shows the saved absolute path
+(`/home/codespace/osm-anchor/cache`, not `osm-cache`) and Registrar shows
+the saved hex — proving the boot-wipe is fixed and persistence is real.
+`cargo test -p logos-osm --lib`: 42 passed, 1 ignored; `cargo clippy`: 0
+warnings. QML braces 543/543, parens 766/766.
 
 ---
 

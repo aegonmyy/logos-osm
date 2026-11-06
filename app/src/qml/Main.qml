@@ -161,26 +161,37 @@ Item {
     readonly property int jobStatusMissLimit: 5   // ~15 s of an unresponsive module
 
     // Auto-init: open the SDK session on startup; discover follows once the
-    // session is up. The user never thinks about "Open" — the fields above
-    // are applied automatically, and editing them re-fires on the next
-    // restart (state persists under the module data tree).
-    function openArgs() {
+    // session is up. The Connect fields are read-only value displays until
+    // the ✎ by each is clicked and the change saved — saving re-fires
+    // `open`, which persists the whole form and re-seeds every field from
+    // what the state file now holds (the round-trip IS the proof it saved).
+    //
+    // `withConfig` is false on the boot call: at startup we pass NO user
+    // config so the values already saved to the state file are loaded (not
+    // clobbered by the fields' placeholder defaults), and then the open
+    // result seeds the fields. Only a user-driven save passes the edited
+    // values back (guarded: empty strings never overwrite a saved value).
+    function openArgs(withConfig) {
         const args = {
-            // No state_path: the module host's CWD is not stable (it can be
-            // a deleted dir) and no hardcoded absolute path is portable
-            // across machines, so the core resolves a per-user location
-            // (LOGOS_USER_DIR, else ~/.logos-osm, else the CWD). Same for
-            // the cache dir: only pass it when the user typed something
-            // other than the placeholder default.
-            storage_url: storageUrl.text,
-            geofabrik_url: geofabrikUrl.text,
             // The registry this app talks to on the live LEZ testnet: the
-            // OSM guest program deployed 2026-10-30.
+            // OSM guest program deployed 2026-10-30. Always passed (app
+            // identity, not a user-editable field).
             program_account_hex: "b2fa65027d9b2540d4ac2aa4e0a38040ac03604c2201930592c547f3d65ecb43"
         }
-        const cache = cacheDir.text.trim()
-        if (cache.length > 0 && cache !== "osm-cache") args.cache_dir = cache
-        if (registrar.text.length) args.registrar_hex = registrar.text
+        if (withConfig) {
+            const s = storageUrl.text.trim()
+            if (s.length) args.storage_url = s
+            const g = geofabrikUrl.text.trim()
+            if (g.length) args.geofabrik_url = g
+            // The cache dir placeholder "osm-cache" lets the core resolve a
+            // per-user path under the Logos data tree; only an explicit,
+            // different value pins it. Same for the registrar: only a
+            // well-formed 64-hex id persists (the field validates live).
+            const cache = cacheDir.text.trim()
+            if (cache.length && cache !== "osm-cache") args.cache_dir = cache
+            const reg = registrar.text.trim()
+            if (/^[0-9a-fA-F]{64}$/.test(reg)) args.registrar_hex = reg
+        }
         return args
     }
 
@@ -324,8 +335,19 @@ Item {
     function setUpdateRegion(path) {
         root.updateRegion = path
     }
+    // A user-driven save: pass the edited Connect form (guarded above), let
+    // the core persist it, and flag that this open is a save so the result
+    // handler seeds the fields back + shows the ✓ flash instead of folding
+    // the section away.
+    property bool connectSavePending: false
+    function saveConnectFields() {
+        root.connectSavePending = true
+        root.call("open", root.openArgs(true))
+    }
     Component.onCompleted: {
-        root.call("open", root.openArgs())
+        // Boot: NO user config — load what's saved; the open result seeds
+        // the Connect fields from the state file.
+        root.call("open", root.openArgs(false))
     }
 
     function call(op, args, tag) {
@@ -728,7 +750,32 @@ Item {
         if (op === "open") {
             // The reachability dot tracks every open, ok or not.
             root.storageReach = r.ok ? "ok" : "fail"
+            const wasSave = root.connectSavePending
+            root.connectSavePending = false
             if (r.ok) {
+                // Seed the Connect fields from what the state file now holds.
+                // This is the persistence proof: whatever `open` loaded (and,
+                // for a save, just wrote) is displayed — a saved edit comes
+                // back, and at boot the saved values (not the placeholder
+                // defaults) fill the fields.
+                if (r.result) {
+                    if (r.result.storage_url) storageUrl.text = r.result.storage_url
+                    if (r.result.geofabrik_url) geofabrikUrl.text = r.result.geofabrik_url
+                    if (r.result.cache_dir) cacheDir.text = r.result.cache_dir
+                    if (r.result.registrar_hex) registrar.text = r.result.registrar_hex
+                }
+                // A user save: flash ✓ on every field and KEEP the section
+                // open so the confirmation is visible. The auto-open folds
+                // Connect away (a manual click can re-open it; a failed open
+                // leaves it expanded).
+                if (wasSave) {
+                    storageUrl.showSaved()
+                    geofabrikUrl.showSaved()
+                    cacheDir.showSaved()
+                    registrar.showSaved()
+                } else if (secConnect) {
+                    secConnect.expanded = false
+                }
                 // Seed the picker from the sizes cached in the state file so
                 // it renders before the live `sizes` refresh lands.
                 if (r.result && r.result.region_sizes) root.regionSizes = r.result.region_sizes
@@ -738,9 +785,6 @@ Item {
                     root.regionStatuses = r.result.region_statuses
                     root.rebuildRegionModel()
                 }
-                // The auto-open worked: fold Connect away (a manual click can
-                // re-open it; a failed open leaves it expanded).
-                if (secConnect) secConnect.expanded = false
                 root.runDiscover()
             }
         } else if (op === "regions" || op === "regions-list") {
@@ -1211,15 +1255,96 @@ Item {
         background: Rectangle {
             implicitHeight: 34
             radius: 4
-            color: Qt.rgba(0, 0, 0, 0.26)
+            color: control.readOnly ? Qt.rgba(0, 0, 0, 0.18) : Qt.rgba(0, 0, 0, 0.26)
             border.width: 1
             border.color: control.validation === "invalid" ? Qt.rgba(0.788, 0.635, 0.247, 0.85)
                         : control.validation === "valid" ? Qt.rgba(0.561, 0.710, 0.451, 0.55)
+                        : control.readOnly ? Qt.rgba(0.961, 0.961, 0.941, 0.10)
                         : (control.activeFocus ? Qt.rgba(0.776, 0.922, 0.969, 0.55)
                         : (control.hovered ? Qt.rgba(0.961, 0.961, 0.941, 0.26)
                                            : Qt.rgba(0.961, 0.961, 0.941, 0.14)))
             Behavior on border.color { ColorAnimation { duration: 150; easing.type: Easing.InOutQuad } }
             Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.InOutQuad } }
+        }
+    }
+
+    // A persistent config value: a read-only display until the ✎ beside it
+    // is clicked, then editable with a ✓ save / ✕ revert. Save re-fires
+    // `open` (which persists the whole Connect form and re-seeds every field
+    // from the state file), so the round-trip is visible proof the value
+    // persisted. Used for every Connect field that survives a restart.
+    component PersistField: RowLayout {
+        id: pf
+        property alias text: fld.text
+        property alias placeholderText: fld.placeholderText
+        property alias validation: fld.validation
+        property bool editing: false
+        property string revert: ""           // value to restore on ✕
+        property bool saved: false           // drives the "✓ saved" flash
+        signal editEntered()
+        signal editCancelled()
+        Layout.fillWidth: true
+        spacing: 6
+        MonoField {
+            id: fld
+            Layout.fillWidth: true
+            readOnly: !pf.editing
+            onAccepted: if (pf.editing) pf.doSave()
+            // While editing, a hover/focus cue is enough; the buttons carry
+            // the affordance. Keep the field full-width minus the buttons.
+        }
+        // The affordance: ✎ to edit, then ✓ save + ✕ revert.
+        GlyphButton {
+            glyph: pf.editing ? "✓" : "✎"
+            tip: pf.editing ? "Save (Enter)" : "Edit value"
+            primary: pf.editing
+            onClicked: {
+                if (pf.editing) pf.doSave()
+                else pf.doEdit()
+            }
+        }
+        GlyphButton {
+            glyph: "✕"
+            tip: "Revert"
+            visible: pf.editing
+            onClicked: pf.doRevert()
+        }
+        Text {
+            visible: pf.saved
+            text: "✓ saved"
+            font.family: root.fSans
+            font.pixelSize: 11
+            font.weight: Font.Medium
+            color: root.cGood
+            Layout.alignment: Qt.AlignVCenter
+        }
+        Timer {
+            id: savedTimer
+            interval: 2600
+            onTriggered: pf.saved = false
+        }
+        function doEdit() {
+            pf.revert = fld.text
+            pf.editing = true
+            fld.forceActiveFocus()
+            fld.selectAll()
+            pf.editEntered()
+        }
+        function doSave() {
+            pf.editing = false
+            // The central save re-fires open; the result handler calls
+            // showSaved() on every field once the round-trip lands. If open
+            // fails (e.g. a bad storage URL), the dot goes red and no flash.
+            root.saveConnectFields()
+        }
+        function doRevert() {
+            fld.text = pf.revert
+            pf.editing = false
+            pf.editCancelled()
+        }
+        function showSaved() {
+            pf.saved = true
+            savedTimer.restart()
         }
     }
 
@@ -1249,6 +1374,54 @@ Item {
             border.width: 1
             border.color: Qt.rgba(0, 0, 0, 0.18)
             Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.InOutQuad } }
+        }
+    }
+
+    // Small square glyph button (✎ ✓ ✕) — the edit/save affordance beside
+    // persistent fields. A plain Rectangle + MouseArea (not a Control) so its
+    // fixed 26×26 size is laid out verbatim by the RowLayout and every click
+    // lands. `primary` renders it as a filled accent chip (the save state
+    // reads as the active action); otherwise a bordered square that fills on
+    // hover so the affordance is obvious.
+    component GlyphButton: Item {
+        id: gb
+        property string glyph: ""
+        property string tip: ""
+        property bool primary: false
+        signal clicked()
+        width: 26
+        height: 26
+        Layout.alignment: Qt.AlignVCenter
+        Rectangle {
+            anchors.fill: parent
+            radius: 5
+            color: gb.primary ? (ma.pressed ? "#e0bd20" : (ma.containsMouse ? "#ffdc52" : root.cAccent))
+                              : (ma.pressed ? Qt.rgba(0.961, 0.961, 0.941, 0.24)
+                                            : (ma.containsMouse ? Qt.rgba(0.961, 0.961, 0.941, 0.18)
+                                                                : Qt.rgba(0.961, 0.961, 0.941, 0.08)))
+            border.width: 1
+            border.color: gb.primary ? Qt.rgba(0, 0, 0, 0.18)
+                          : Qt.rgba(0.961, 0.961, 0.941, ma.containsMouse ? 0.40 : 0.22)
+            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.InOutQuad } }
+            Text {
+                anchors.fill: parent
+                text: gb.glyph
+                font.family: root.fSans
+                font.pixelSize: 13
+                color: gb.primary ? "#152521" : root.cMuted
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+        MouseArea {
+            id: ma
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: gb.clicked()
+            ToolTip.visible: gb.tip.length > 0 && ma.containsMouse
+            ToolTip.delay: 300
+            ToolTip.text: gb.tip
         }
     }
 
@@ -1769,9 +1942,16 @@ Item {
                                 model: root.tasks.slice().reverse()
                                 delegate: Rectangle {
                                     width: taskList.width
-                                    height: modelData.summary.length > 0 ? 52 : 36
+                                    // Tall enough for a wrapped error (up to 3
+                                    // lines); the summary Text's
+                                    // implicitHeight drives the row so long
+                                    // messages aren't clipped.
+                                    height: modelData.summary.length > 0
+                                            ? Math.max(52, taskCol.implicitHeight + 14)
+                                            : 36
                                     color: taskMouse.containsMouse ? root.cPanelHi : "transparent"
                                     ColumnLayout {
+                                        id: taskCol
                                         anchors.fill: parent
                                         anchors.leftMargin: 10
                                         anchors.rightMargin: 10
@@ -1817,7 +1997,17 @@ Item {
                                             font.pixelSize: 11
                                             color: modelData.state === "error" ? root.cBrown : root.cMuted
                                             Layout.fillWidth: true
+                                            // Wrap long summaries (error messages can be a
+                                            // full sentence) instead of eliding them off the
+                                            // right edge — the panel scrolls vertically, not
+                                            // horizontally, so a clipped one-liner was
+                                            // unreadable. Full text also in the tooltip.
+                                            wrapMode: Text.Wrap
+                                            maximumLineCount: 3
                                             elide: Text.ElideRight
+                                            ToolTip.visible: taskMouse.containsMouse && modelData.summary.length > 0
+                                            ToolTip.delay: 300
+                                            ToolTip.text: modelData.summary
                                         }
                                     }
                                     Rectangle {
@@ -1955,7 +2145,7 @@ Item {
                                           || storageUrl.text === "http://127.0.0.1:8080")
                                          ? "Your local Logos Storage node — leave as-is unless you're pointing at a remote one."
                                          : ""
-                                MonoField { id: storageUrl; text: "http://127.0.0.1:8080" }
+                                PersistField { id: storageUrl; text: "http://127.0.0.1:8080" }
                             }
                             FieldCell {
                                 label: "GEOFABRIK BASE URL"
@@ -1963,7 +2153,7 @@ Item {
                                           || geofabrikUrl.text === "https://download.geofabrik.de")
                                          ? "Where map data downloads from. The default is the public source."
                                          : ""
-                                MonoField { id: geofabrikUrl; text: "https://download.geofabrik.de" }
+                                PersistField { id: geofabrikUrl; text: "https://download.geofabrik.de" }
                             }
                             FieldCell {
                                 label: "CACHE DIR"
@@ -1971,7 +2161,7 @@ Item {
                                           || cacheDir.text === "osm-cache")
                                          ? "Where downloaded map files are kept on disk."
                                          : ""
-                                MonoField { id: cacheDir; text: "osm-cache" }
+                                PersistField { id: cacheDir; text: "osm-cache" }
                             }
                             FieldCell {
                                 label: "REGISTRAR (HEX, 32B)"
@@ -1989,7 +2179,7 @@ Item {
                                     if (t.length === 0) return root.cMuted
                                     return /^[0-9a-fA-F]{64}$/.test(t) ? root.cGood : root.cWarn
                                 }
-                                MonoField {
+                                PersistField {
                                     id: registrar
                                     placeholderText: "registrar account id"
                                     validation: {
