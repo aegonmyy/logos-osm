@@ -1,10 +1,47 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-06** — explicit edit/save (✎→✓) for every persistent Connect field + real persistence (registrar now saved; boot-wipe fixed).
+> **Last updated: 2026-11-06** — shipped as v1.3.10: hover affordances + human status lines, CLI `register --sign`, wallet create/fund examples, post-announcement TODO roadmap.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
+
+## 🤝 FOLLOW-UP (2026-11-06) — hover "shine light" affordances + human status lines
+
+Two UX gaps, one design: **hover explains the control, the status line
+explains the outcome.**
+
+**1. Hover explanations everywhere.** `SButton`/`PButton` gained a `tip`
+string property → ToolTip on `hovered` (300 ms delay, suppressed when
+empty). Every button in the app now sets it — the three Fetch actions,
+re-check registry (both), List regions (both), the four Consumer pickers,
+Restore + import, use cached file, Import (validate + catalog), Verify +
+store + register tx, Check for newer snapshot, Local catalog. The 7
+`FieldCell`s all carry `info:` (ⓟ glyph → tooltip): storage/geofabrik/cache
+(registrar already had one), CID, published MD5, PBF FILE. The `info` hook
+existed since v1.3.5 but only 1 of 7 fields used it.
+
+**2. Deterministic results → fixed human text.** The Consumer ops return
+small fixed shapes, so `taskSummary()` now pairs each to a sentence
+instead of "ok": fetch → `region · restored ✓ · 51.4 MB · md5 matches
+on-chain ✓`; import → `imported ✓ · … · md5 …` or (workflow
+"verified+stored") `verified + stored ✓ · cid … · tx ready → sign with
+wallet`; update → `up to date — your file matches Geofabrik's latest
+(v20261106)` / `update available — v20261106 → v20261120` / `not in your
+catalog yet — latest published v…`. Successful fetch/import/update no
+longer raw-dump JSON to the output console (the status line says it
+better); failures still dump in full.
+
+**Verified:** `qmlformat` parses clean, `qmllint` 0 errors (only pre-
+existing layout warnings), app reloaded on :99 with no QML errors,
+storage node API healthy. Balance 547/547 braces, 802/802 parens.
+Visual hover verification pending in VNC (user hovers).
+
+**Reapplied after an accidental `git checkout` wipe** (the working tree
+was reset to 85403a2 mid-task; all edits were re-applied from history and
+balance-checked). The wallet-link Text+MouseArea fix was in that wipe too
+and has been **reapplied** (Text `walletLink` + `walletMA` MouseArea +
+`cInfoHi` color token) — the RichText `<a>` form is gone again.
 
 ## 🤝 STATE AT HANDOFF (2026-11-05, post-1.3.4) — long ops report back
 
@@ -385,6 +422,56 @@ seeding verified: after a restart, Cache Dir shows the saved absolute path
 the saved hex — proving the boot-wipe is fixed and persistence is real.
 `cargo test -p logos-osm --lib`: 42 passed, 1 ignored; `cargo clippy`: 0
 warnings. QML braces 543/543, parens 766/766.
+
+### Wallet-install link made actually clickable
+
+The "How to install the LEZ wallet" link in the Finish-on-chain card was a
+RichText `<a>` whose hit-box wasn't registering clicks. Replaced it with a
+styled `Text` + `MouseArea` (underlined info-blue, hand cursor, the whole
+label is the hit target) that calls `Qt.openUrlExternally` to the LEZ
+wallet CLI docs. New `cInfoHi` color for the link hover state. User-confirmed
+it now opens the browser.
+
+---
+
+## 🤝 FOLLOW-UP (2026-11-06) — `osm register --sign`: build + sign + submit in one step
+
+The CLI's `register` / `register-bulk` previously only **built** the
+registration tx and printed it as JSON, leaving the user to copy-paste that
+JSON into the wallet CLI to sign + submit — a clunky two-tool handoff.
+Since it's all command-line tooling on the user's own machine, the wallet's
+key store is right there to open.
+
+**Default is still build-only** (submitting to the chain is a delicate,
+irreversible action — the safe path stays the default). A new `--sign` flag
+opts into the full flow:
+
+```sh
+osm register china/henan --registrar <64-hex>        # build only (default): prints tx JSON
+osm register china/henan --registrar <64-hex> --sign # build + open wallet + sign + submit + await
+```
+
+`--sign` opens the LEZ wallet at `~/.logos-osm/wallet/` (the one
+`create_wallet` writes — override with `--wallet-dir` / `OSM_WALLET_DIR`),
+calls `WalletCore::new_update_chain` (loads the existing key store via
+`Storage::from_path`, same as the wallet CLI itself — the CLI never sees
+key material beyond opening that store), `send_pub_tx` + `poll_transaction`
++ `sync_to_latest_block`, with a transient-retry loop for the testnet's
+502/timeout/dropped-connection flakiness. No wallet present → a clear
+error pointing at `create_wallet`. The same flag applies to `register-bulk`.
+
+The "app never holds keys" rule was about the **Basecamp GUI app** (shared,
+persistent, you don't want keys there) — not the personal CLI, which reads
+the wallet store exactly as the wallet CLI does.
+
+`cli/src/main.rs`: new `submit_register` helper + inline `retry!` macro
+(closures can't return borrowed `wallet` futures, so the retry is a macro
+matching the integration-test pattern); `Register`/`RegisterBulk` gain
+`--sign`/`--wallet-dir`/`--wallet-password`. `cargo build -p logos-osm-cli`:
+clean; `cargo clippy -p logos-osm-cli`: 0; SDK tests unchanged (42/1).
+Verified: build-only default prints tx JSON (unchanged); `--sign` with no
+wallet errors cleanly; `--help` documents the flags. `docs/LOCAL_DEMO_SETUP.md`
+updated to the one-step `--sign` flow.
 
 ---
 

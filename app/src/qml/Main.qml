@@ -456,9 +456,48 @@ Item {
                 return (res.count !== undefined ? res.count : "?") + " regions · "
                      + (res.total_bytes !== undefined ? root.fmtBytes(res.total_bytes) : "?")
             case "fetch": {
+                // Restore: downloaded from storage + verified against the
+                // on-chain checksum + imported locally.
                 const region = res.region || (t.args && t.args.region) || ""
-                const cid = (t.args && t.args.cid) || ""
-                return cid ? region + " · " + cid : region
+                const bytes = res.bytes !== undefined ? root.fmtBytes(res.bytes) : ""
+                const verified = res.md5_verified ? "md5 matches on-chain ✓" : ""
+                return region + " · restored ✓"
+                     + (bytes ? " · " + bytes : "")
+                     + (verified ? " · " + verified : "")
+            }
+            case "import": {
+                // Two result shapes: plain catalog import, or the full
+                // verify+store+register-tx workflow.
+                const region = res.region || (t.args && t.args.region) || ""
+                const bytes = res.bytes !== undefined ? root.fmtBytes(res.bytes) : ""
+                if (res.workflow === "verified+stored") {
+                    const cid = String(res.cid || "").substring(0, 10)
+                    const tx = res.tx ? " · tx ready → sign with wallet" : ""
+                    return region + " · verified + stored ✓"
+                         + (bytes ? " · " + bytes : "")
+                         + (cid ? " · cid " + cid + "…" : "")
+                         + tx
+                }
+                return region + " · imported ✓"
+                     + (bytes ? " · " + bytes : "")
+                     + (res.md5 ? " · md5 " + String(res.md5).substring(0, 8) + "…" : "")
+            }
+            case "update": {
+                const region = (t.args && t.args.region) || ""
+                const pub = res.published !== undefined && res.published !== null
+                            ? "v" + res.published : ""
+                if (res.status === "up_to_date")
+                    return region + " · up to date — your file matches Geofabrik's latest"
+                         + (pub ? " (" + pub + ")" : "")
+                if (res.status === "update_available") {
+                    const loc = res.local !== undefined && res.local !== null
+                                ? "v" + res.local : "?"
+                    return region + " · update available — " + loc + " → " + (pub || "?")
+                }
+                if (res.status === "not_imported")
+                    return region + " · not in your catalog yet — latest published "
+                         + (pub || "?")
+                return region + " · checked"
             }
             case "lookup_bulk": {
                 const reg = res.registered_count !== undefined ? res.registered_count : "?"
@@ -903,8 +942,13 @@ Item {
             if (r.ok) root.call("regions", {}, "regions-list")
         }
         // The 1 Hz job_status polls are bookkeeping, not results — keep
-        // them out of the output consoles.
-        if (op !== "job_status") {
+        // them out of the output consoles. Likewise the deterministic
+        // Consumer ops (fetch/import/update) when they SUCCEEDED: their
+        // outcome is already shown as a human status line in the task row,
+        // so dumping the raw JSON would just repeat it less readably.
+        // Failed ops always dump, so the error is visible in full.
+        const tailored = (op === "fetch" || op === "import" || op === "update")
+        if (op !== "job_status" && !(r.ok && tailored)) {
             if (root.currentTab === 0)      out.outputText  = consoleText
             else if (root.currentTab === 1) outR.outputText = consoleText
             else                            out2.outputText = consoleText
@@ -981,6 +1025,7 @@ Item {
     readonly property color cTan:      "#e2e0c9"                            // accent tan — secondary surfaces
     readonly property color cTeal:     "#5f797c"                            // steel teal — muted accents
     readonly property color cInfo:     "#c6ebf7"                            // light blue — info, links
+    readonly property color cInfoHi:   "#e4f6fd"                            // brighter info — link hover
     readonly property color cBrown:    "#a18863"                            // brown — error / read-failed status
     // Validation/reachability tones, kept quiet on the dark-green canvas:
     // amber for "fixable wrong", soft green for confirmed, soft red for
@@ -1351,6 +1396,7 @@ Item {
     // Primary action — the yellow accent, one per section.
     component PButton: Button {
         id: control
+        property string tip: ""          // hover explanation of this button's action
         leftPadding: 18
         rightPadding: 18
         topPadding: 8
@@ -1375,6 +1421,10 @@ Item {
             border.color: Qt.rgba(0, 0, 0, 0.18)
             Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.InOutQuad } }
         }
+        // Shine light on the button: hover shows what clicking will do.
+        ToolTip.visible: control.tip.length > 0 && control.hovered
+        ToolTip.text: control.tip
+        ToolTip.delay: 300
     }
 
     // Small square glyph button (✎ ✓ ✕) — the edit/save affordance beside
@@ -1428,6 +1478,7 @@ Item {
     // Secondary action — steel teal outline on the canvas.
     component SButton: Button {
         id: control
+        property string tip: ""          // hover explanation of this button's action
         leftPadding: 16
         rightPadding: 16
         topPadding: 8
@@ -1453,6 +1504,10 @@ Item {
             border.color: Qt.rgba(0.373, 0.475, 0.486, 0.85)
             Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.InOutQuad } }
         }
+        // Shine light on the button: hover shows what clicking will do.
+        ToolTip.visible: control.tip.length > 0 && control.hovered
+        ToolTip.text: control.tip
+        ToolTip.delay: 300
     }
 
     // The region-picker popup every picker shares (Host §02 is multi-select;
@@ -2137,6 +2192,7 @@ Item {
                             rowSpacing: 12
                             FieldCell {
                                 label: "STORAGE (CODEX) URL"
+                                info: "The Logos Storage node that holds hosted map blobs (by content ID). Your local node runs inside Basecamp; point here at a remote node (e.g. a teammate's) to share data. The dot turns green when the node answers."
                                 // The dot is the open result: green = the
                                 // storage node answered, red = it did not.
                                 dot: root.storageReach === "ok" ? "ok"
@@ -2149,6 +2205,7 @@ Item {
                             }
                             FieldCell {
                                 label: "GEOFABRIK BASE URL"
+                                info: "Where raw map data downloads from. Geofabrik is the public source of OpenStreetMap regional extracts. Change only if you're using a mirror."
                                 caption: (geofabrikUrl.text.length === 0
                                           || geofabrikUrl.text === "https://download.geofabrik.de")
                                          ? "Where map data downloads from. The default is the public source."
@@ -2157,6 +2214,7 @@ Item {
                             }
                             FieldCell {
                                 label: "CACHE DIR"
+                                info: "The local folder that holds your downloaded .osm.pbf files and catalog.json (the list of regions this machine has hosted/imported). Each machine keeps its own catalog."
                                 caption: (cacheDir.text.length === 0
                                           || cacheDir.text === "osm-cache")
                                          ? "Where downloaded map files are kept on disk."
@@ -2194,6 +2252,7 @@ Item {
                             spacing: 12
                             SButton {
                                 text: "List regions"
+                                tip: "Queries Geofabrik for the full set of available regions and their download sizes (refreshes the picker)."
                                 onClicked: root.call("regions")
                             }
                             Item { Layout.fillWidth: true }
@@ -2258,6 +2317,7 @@ Item {
                             text: (root.selectedRegions.length === 0)
                                   ? (root.sizesLoading ? "Select regions  (sizes loading…)" : "Select regions ▾")
                                   : (root.selectedRegions.length + " selected ▾")
+                            tip: "Pick one or more regions to fetch. The count and total size update as you select."
                             onClicked: hostPicker.open()
                             RegionPickPopup {
                                 id: hostPicker
@@ -2286,6 +2346,7 @@ Item {
                                 return "Fetch selected  (" + sel.length + " · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
+                            tip: "Downloads each selected region from Geofabrik, verifies it, and stores it on Logos Storage — hosting it for everyone. Runs one at a time in the background (the heavy lifting)."
                             onClicked: root.startHostRun(root.selectedRegions)
                         }
                         SButton {
@@ -2299,6 +2360,7 @@ Item {
                                 return "Fetch all except selected  (" + keep.length +
                                        (bytes ? " · " + root.fmtBytes(bytes) : "") + ")"
                             }
+                            tip: "Fetches every region EXCEPT the ones you selected — handy for hosting a whole continent minus what you already have."
                             onClicked: root.startHostRun(
                                 root.regionList.map(g => g.path)
                                     .filter(p => root.selectedRegions.indexOf(p) < 0))
@@ -2314,6 +2376,7 @@ Item {
                                 return "Fetch all  (" + todo.length + " new · " +
                                        (bytes ? root.fmtBytes(bytes) : "—") + ")"
                             }
+                            tip: "Fetches every region you haven't hosted yet (skips ones already in your catalog). Big total — expect a long run."
                             onClicked: root.startHostRun(
                                 root.regionList.map(g => g.path)
                                     .filter(p => root.hostedRegions.indexOf(p) < 0))
@@ -2388,17 +2451,31 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 12
+                                // Styled as a link but driven by a MouseArea so
+                                // the whole label is the hit target — RichText
+                                // <a> hit-testing is finicky and the link wasn't
+                                // clickable. Underlined info-blue + hand cursor.
                                 Text {
-                                    text: "<a href=\"https://docs.logos.co/lez/get-started/run-lez-wallet-via-cli\">How to install the LEZ wallet</a>"
-                                    textFormat: Text.RichText
+                                    id: walletLink
+                                    text: "How to install the LEZ wallet"
                                     font.family: root.fSans
                                     font.pixelSize: 11
-                                    color: root.cInfo
-                                    onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                                    font.underline: true
+                                    color: walletMA.containsMouse ? root.cInfoHi : root.cInfo
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                    MouseArea {
+                                        id: walletMA
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: Qt.openUrlExternally(
+                                            "https://docs.logos.co/lez/get-started/run-lez-wallet-via-cli")
+                                    }
                                 }
                                 Item { Layout.fillWidth: true }
                                 SButton {
                                     text: "re-check registry"
+                                    tip: "Re-reads the on-chain registry for the regions you just fetched but haven't registered yet — confirms whether the wallet's sign+submit went through."
                                     onClicked: root.call("lookup_bulk", {
                                         regions: root.lastRunPending.join(",")
                                     })
@@ -2452,10 +2529,12 @@ Item {
                     Item { Layout.fillWidth: true }
                     SButton {
                         text: "Re-check"
+                        tip: "Re-reads the on-chain registry for every cataloged region — refreshes the registered/not-registered badges across the table."
                         onClicked: root.call("lookup_bulk", {})
                     }
                     PButton {
                         text: "List regions"
+                        tip: "Queries Geofabrik for the full set of available regions and their sizes (refreshes the picker and the table)."
                         onClicked: root.call("regions")
                     }
                 }
@@ -2707,6 +2786,7 @@ Item {
                                 text: (root.fetchRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.fetchRegion + " ▾")
+                                tip: "Pick a region to restore. Choosing one looks it up on-chain and auto-fills the CID + checksum to fetch."
                                 onClicked: fetchPicker.open()
                                 RegionPickPopup {
                                     id: fetchPicker
@@ -2726,6 +2806,7 @@ Item {
                             rowSpacing: 12
                             FieldCell {
                                 label: "CID"
+                                info: "The content ID of the snapshot on Logos Storage. Auto-filled from the on-chain registry when you pick a region — it identifies the exact bytes to fetch."
                                 caption: {
                                     switch (root.fetchFillState) {
                                         case "ok":            return "from registry ✓"
@@ -2748,6 +2829,7 @@ Item {
                             }
                             FieldCell {
                                 label: "PUBLISHED MD5 (HEX)"
+                                info: "The checksum recorded on-chain for this snapshot. The restore verifies the downloaded file against this — a mismatch means the data was tampered with or changed since registration."
                                 caption: "the registered checksum — auto-filled"
                                 MonoField {
                                     id: fMd5
@@ -2767,6 +2849,7 @@ Item {
                                 enabled: root.fetchRegion !== "" && !root.longJobBusy
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Restore + import"
+                                tip: "Downloads the snapshot from Logos Storage by its CID, verifies it against the on-chain checksum, and imports it to your local catalog. Runs in the background (large regions take minutes)."
                                 onClicked: root.call("fetch", {
                                     region: root.fetchRegion,
                                     cid: fCid.text.trim(),
@@ -2826,6 +2909,7 @@ Item {
                                 text: (root.importRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.importRegion + " ▾")
+                                tip: "Pick which region your local PBF file is for — import matches it to the right catalog entry."
                                 onClicked: importPicker.open()
                                 RegionPickPopup {
                                     id: importPicker
@@ -2843,6 +2927,7 @@ Item {
                             spacing: 12
                             FieldCell {
                                 label: "PBF FILE"
+                                info: "A .osm.pbf file on your disk (downloaded any way you like). Import validates it and records it in your local catalog so the app treats it as a known region. No network needed."
                                 caption: "a .osm.pbf file on disk"
                                 MonoField { id: impPath; placeholderText: "/path/to/region-latest.osm.pbf" }
                             }
@@ -2855,12 +2940,14 @@ Item {
                                 // path from the local catalog.
                                 visible: root.cachedPathFor(root.importRegion) !== ""
                                 text: "use cached file"
+                                tip: "Fills the path from this region's file already in your cache dir, if you've hosted or restored it before."
                                 onClicked: impPath.text = root.cachedPathFor(root.importRegion)
                             }
                             SButton {
                                 enabled: root.importRegion !== "" && impPath.text.trim().length > 0
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Import (validate + catalog)"
+                                tip: "Validates the local PBF file and records it in your local catalog. No network, no storage node, no chain — purely local bookkeeping."
                                 onClicked: root.call("import", {
                                     region: root.importRegion,
                                     pbf: impPath.text.trim()
@@ -2873,6 +2960,7 @@ Item {
                                 enabled: root.importRegion !== "" && impPath.text.trim().length > 0
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Verify + store + register tx"
+                                tip: "Full workflow: verifies the file against Geofabrik's official published MD5, stores it on Logos Storage (gets a CID), and builds the registration transaction — the wallet signs it (no keys here)."
                                 onClicked: root.call("import", {
                                     region: root.importRegion,
                                     pbf: impPath.text.trim(),
@@ -2930,6 +3018,7 @@ Item {
                                 text: (root.updateRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.updateRegion + " ▾")
+                                tip: "Pick one of your cataloged regions to check for a newer published snapshot."
                                 onClicked: updatePicker.open()
                                 RegionPickPopup {
                                     id: updatePicker
@@ -2944,6 +3033,7 @@ Item {
                                 enabled: root.updateRegion !== ""
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Check for newer snapshot"
+                                tip: "Compares your local version against Geofabrik's latest published snapshot for this region — tells you when it's time to re-fetch (and re-register) fresh data."
                                 onClicked: root.call("update", {
                                     region: root.updateRegion
                                 })
@@ -2954,6 +3044,7 @@ Item {
                             spacing: 12
                             SButton {
                                 text: "Local catalog"
+                                tip: "Lists the regions this machine knows: everything you've hosted, restored, or imported, with each one's CID, MD5 and version."
                                 onClicked: root.call("catalog")
                             }
                             Item { Layout.fillWidth: true }

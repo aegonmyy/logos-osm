@@ -15,17 +15,22 @@
 //! sequencer over JSON-RPC, so a query needs no wallet and no local state.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use lee_core::account::AccountId;
 use logos_osm::regions::{Level, REGIONS};
 use logos_osm::registry::{
     build_init, build_register_region, build_register_regions_batch, region_pda, RegionEntry,
+    OsmTxBuilt,
 };
 use logos_osm::storage::{CodexStorage, MemoryStorage};
 use logos_osm::{OsmClient, UpdateStatus};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::Serialize;
+use wallet::config::{SequencerConnectionData, WalletConfigOverrides};
+use wallet::WalletCore;
 
 #[derive(Parser)]
 #[command(
@@ -96,13 +101,34 @@ enum Cmd {
         opt_out: String,
     },
     /// Build the LEZ registration tx for a hosted (catalog) region.
+    ///
+    /// By default this only BUILDS the transaction and prints it as JSON (the
+    /// safe, inspect-first path — submitting to the chain is irreversible).
+    /// Pass `--sign` to also open your LEZ wallet, sign, and submit the tx to
+    /// the testnet sequencer, then await inclusion.
     Register {
         region: String,
         /// Registrar account id (32-byte hex).
         #[arg(long)]
         registrar: String,
+        /// Sign with your LEZ wallet and submit to the sequencer (default:
+        /// build the tx only, print JSON).
+        #[arg(long)]
+        sign: bool,
+        /// Wallet directory (config.json + storage/). Defaults to the
+        /// `~/.logos-osm/wallet/` that `create_wallet` writes. Only used with
+        /// `--sign`.
+        #[arg(long, env = "OSM_WALLET_DIR")]
+        wallet_dir: Option<PathBuf>,
+        /// Wallet password. Defaults to `testpw` (what `create_wallet` uses).
+        /// Only used with `--sign`.
+        #[arg(long, env = "OSM_WALLET_PASSWORD", default_value = "testpw")]
+        wallet_password: String,
     },
     /// Build a batch registration tx (bulk hosting on-chain).
+    ///
+    /// Same `--sign` opt-in as `register`: build-only by default, sign+submit
+    /// when `--sign` is passed.
     RegisterBulk {
         /// Comma-separated region paths.
         #[arg(long)]
@@ -110,6 +136,19 @@ enum Cmd {
         /// Registrar account id (32-byte hex).
         #[arg(long)]
         registrar: String,
+        /// Sign with your LEZ wallet and submit to the sequencer (default:
+        /// build the tx only, print JSON).
+        #[arg(long)]
+        sign: bool,
+        /// Wallet directory (config.json + storage/). Defaults to the
+        /// `~/.logos-osm/wallet/` that `create_wallet` writes. Only used with
+        /// `--sign`.
+        #[arg(long, env = "OSM_WALLET_DIR")]
+        wallet_dir: Option<PathBuf>,
+        /// Wallet password. Defaults to `testpw` (what `create_wallet` uses).
+        /// Only used with `--sign`.
+        #[arg(long, env = "OSM_WALLET_PASSWORD", default_value = "testpw")]
+        wallet_password: String,
     },
     /// Build the registry `Init` tx (deploy-time, once).
     Init {
@@ -203,6 +242,93 @@ fn print_tx(
     };
     println!("--- {label} transaction (submit via the wallet) ---");
     println!("{}", serde_json::to_string_pretty(&cmd).unwrap());
+}
+
+/// Sign a built registration tx with the user's LEZ wallet and submit it to
+/// the sequencer, then await inclusion. The wallet (keys) live in
+/// `wallet_dir` — the same `~/.logos-osm/wallet/` that `create_wallet`
+/// writes — so the CLI never sees key material beyond opening that store,
+/// exactly like the wallet CLI itself does.
+async fn submit_register(
+    wallet_dir: Option<PathBuf>,
+    wallet_password: &str,
+    sequencer_url: &str,
+    built: &OsmTxBuilt,
+    signer: &AccountId,
+    label: &str,
+) -> Result<()> {
+    let dir = wallet_dir.unwrap_or_else(|| {
+        std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".logos-osm")
+            .join("wallet")
+    });
+    let config_path = dir.join("config.json");
+    // The wallet persists its key store under storage/ (a single file whose
+    // name is generated); point WalletCore at the directory's storage root
+    // the same way create_wallet does.
+    let storage_path = dir.join("storage");
+    if !config_path.exists() {
+        anyhow::bail!(
+            "no wallet at {} — run `cargo run -p osm-integration-tests --example create_wallet` \
+             first (or pass --wallet-dir)",
+            dir.display()
+        );
+    }
+    let overrides = WalletConfigOverrides {
+        sequencer: Some(SequencerConnectionData {
+            sequencer_addr: sequencer_url.parse().context("--sequencer is not a usable URL")?,
+            basic_auth: None,
+        }),
+        seq_tx_poll_max_blocks: Some(200),
+        seq_poll_max_retries: Some(2000),
+        seq_poll_timeout: Some(Duration::from_secs(3)),
+        ..Default::default()
+    };
+    println!("opening wallet at {} ...", dir.display());
+    let mut wallet = WalletCore::new_update_chain(config_path, storage_path, Some(overrides))
+        .with_context(|| format!("opening wallet at {}", dir.display()))?;
+    let _ = wallet_password; // reserved for when the wallet encrypts storage
+
+    // Inline retry: the wallet/sequencer calls borrow `wallet`, so a closure-
+    // based retry helper can't return the borrowed futures. Each transient
+    // failure (502 / timeout / dropped connection — the testnet does all
+    // three) backs off 10s and retries, up to 12 attempts.
+    macro_rules! retry {
+        ($op:expr, $label:expr) => {{
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match $op.await {
+                    Ok(v) => break v,
+                    Err(e) => {
+                        let m = e.to_string();
+                        let transient = m.contains("502")
+                            || m.contains("timed out")
+                            || m.contains("connection closed");
+                        if transient && attempt < 12 {
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            continue;
+                        }
+                        anyhow::bail!("{} failed after {attempt} attempts: {m}", $label);
+                    }
+                }
+            }
+        }};
+    }
+    retry!(wallet.sync_to_latest_block(), "wallet-sync");
+    println!("sending {label} transaction ...");
+    let mentions = built.mentions(signer);
+    let h = wallet
+        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{label} send failed: {e:?}"))?;
+    println!("submitted (tx {h}); awaiting inclusion ...");
+    retry!(wallet.poll_transaction(h), "tx-poll");
+    retry!(wallet.sync_to_latest_block(), "post-tx-sync");
+    println!("{label}: included ✓");
+    Ok(())
 }
 
 /// Connect to the sequencer for read-only registry queries.
@@ -410,8 +536,9 @@ async fn main() -> Result<()> {
                 Ok(())
             })?;
         }
-        Cmd::Register { region, registrar } => {
+        Cmd::Register { region, registrar, sign, wallet_dir, wallet_password } => {
             let registrar = parse_account(&registrar)?;
+            let sequencer = sequencer_url.clone();
             with_client!(|client: OsmClient<_>| async move {
                 let rec = client
                     .catalog()
@@ -433,12 +560,17 @@ async fn main() -> Result<()> {
                     &registrar,
                     &snap.registration(None),
                 );
-                print_tx("RegisterRegion", &built, &registrar);
+                if sign {
+                    submit_register(wallet_dir, &wallet_password, &sequencer, &built, &registrar, "RegisterRegion").await?;
+                } else {
+                    print_tx("RegisterRegion", &built, &registrar);
+                }
                 Ok(())
             })?;
         }
-        Cmd::RegisterBulk { regions, registrar } => {
+        Cmd::RegisterBulk { regions, registrar, sign, wallet_dir, wallet_password } => {
             let registrar = parse_account(&registrar)?;
+            let sequencer = sequencer_url.clone();
             let wanted: Vec<String> = regions
                 .split(',')
                 .map(str::trim)
@@ -467,7 +599,11 @@ async fn main() -> Result<()> {
                     &registrar,
                     &regs,
                 );
-                print_tx("RegisterRegionsBatch", &built, &registrar);
+                if sign {
+                    submit_register(wallet_dir, &wallet_password, &sequencer, &built, &registrar, "RegisterRegionsBatch").await?;
+                } else {
+                    print_tx("RegisterRegionsBatch", &built, &registrar);
+                }
                 Ok(())
             })?;
         }

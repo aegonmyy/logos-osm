@@ -116,9 +116,17 @@ cargo build -p logos-osm-cli --release
 
 ```sh
 osm host china/henan --registrar <64-hex>          # download + verify + store
-osm register china/henan --registrar <64-hex>      # build the register tx (JSON)
+osm register china/henan --registrar <64-hex>      # build the register tx (prints JSON)
+osm register china/henan --registrar <64-hex> --sign   # build + sign + submit in one step
 osm lookup --region china/henan                    # read back the chain entry (no wallet)
 ```
+
+> `register` (and `register-bulk`) **build only** by default — printing the
+> transaction JSON is the safe, inspect-first path, since submitting to the
+> chain is irreversible. Adding `--sign` opts into the full flow: the CLI
+> opens your LEZ wallet (`~/.logos-osm/wallet/`, the one `create_wallet`
+> wrote — override with `--wallet-dir`), signs, submits to the testnet
+> sequencer, and awaits inclusion.
 
 ## 4. End-to-end demo round-trip
 
@@ -131,20 +139,18 @@ light:
 #    GUI; the CLI equivalent (needs storage_url + geofabrik + account env):
 osm host china/henan --registrar <64-hex>
 
-# 2. Build the registration transaction (prints JSON the wallet signs):
-osm register china/henan --registrar <64-hex
+# 2. Register on-chain — one command builds, signs, and submits:
+osm register china/henan --registrar <64-hex> --sign
+#    (omit --sign to just print the tx JSON for inspection / another signer)
 
-# 3. Sign + submit with the wallet (the wallet owns the keys):
-#    (paste the tx JSON from step 2 into the wallet's submit flow)
-
-# 4. Verify — read back what the chain now records (no wallet needed):
+# 3. Verify — read back what the chain now records (no wallet needed):
 osm lookup --region china/henan
 ```
 
-Or drive steps 1–2 from the **OSM app GUI** (Fetch button → "Finish
-on-chain" card gives you the exact `osm register …` command), then sign
-with the wallet CLI, then click **re-check registry** in the app to see the
-badge flip to `registered ✓`.
+Or drive the build from the **OSM app GUI** (Fetch button → "Finish
+on-chain" card gives you the exact `osm register …` command), run it with
+`--sign` in your terminal, then click **re-check registry** in the app to
+see the badge flip to `registered ✓`.
 
 ## Troubleshooting
 
