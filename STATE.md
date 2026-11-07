@@ -1,10 +1,57 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-06** — shipped as v1.3.10: hover affordances + human status lines, CLI `register --sign`, wallet create/fund examples, post-announcement TODO roadmap.
+> **Last updated: 2026-11-07** — demo-prep polish: Clear Tasks now actually stops jobs (new `clear_jobs` op), duplicate banner hints at clearing, headings shortened, em dashes stripped from app text.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
+
+## Versioning
+
+**SemVer** (`MAJOR.MINOR.PATCH`) from the next release onward — MINOR for new
+features, PATCH for bug fixes, MAJOR for breaking changes. `v1.3.10`
+(2026-11-06) was the last release under the old "patch-bump every ship"
+convention; the next feature ship is `v1.4.0`. The release workflow reads the
+root `metadata.json` `version` field and skips as "already-published" if it
+matches an existing release tag — so bump **all three** metadata files (root,
+`module/metadata.json`, `app/metadata.json`) together, and remember to
+`git add` them (1.3.10's first dispatch silently skipped because the bump was
+edited but never staged).
+
+## 🤝 FOLLOW-UP (2026-11-07) — demo-prep polish: Clear stops jobs, banner hints, shorter headings, no em dashes
+
+Four asks, demo-prep round:
+
+**1. Clear Tasks actually stops things.** It already stopped the client
+loops (host queue, job polling) but the core's running-job registry kept
+the job "running", so a new identical action was refused with
+"already running". New SDK op **`clear_jobs`** drops every running job
+from the JOBS table: `running_long_job()` frees, a new host/fetch starts
+immediately, and the orphaned worker's result is silently discarded when
+it finishes (find-by-id misses). The worker thread itself can't be killed
+(no cancel token in the download path; std::thread) - a cleared download
+may still finish server-side, but nothing tracks or blocks on it.
+`clearTasks()` fires `clear_jobs` via direct `invokeOp` (bookkeeping, not
+a tracked task). Verified by ctypes: host#1 → clear (cleared:1) →
+identical host#2 accepted instantly → host#3 refused with the new hint.
+
+**2. Duplicate banner hints at clearing.** The refusal message now reads
+"a long job is already running (job-N); wait for it to finish, or clear
+tasks to stop it and start a new one" (both host and fetch).
+
+**3. Shorter section headings.** "Fetch (Geofabrik → verify MD5 → your
+storage node)" → **"Fetch"**; "Restore a registered snapshot (storage →
+verify → import)" → **"Restore"**.
+
+**4. Em dashes removed from app text.** All 46 visible-string lines
+(text:/tip:/info:/caption/heading/Hint/ToolTip/summary) had `—` replaced
+with `-`. Comments keep their em dashes (not app text).
+
+Also this round: henan wiped again for the demo (catalog 28, no cache
+file, no state entry, blob deleted) and verified still-absent after the
+clear-jobs test. `cargo build -p logos-osm --release` clean, 42/42 SDK
+tests, qmlformat/qmllint clean, app reloaded on :99 no QML errors.
+Deployed: liblogos_osm.so + Main.qml.
 
 ## 🤝 FOLLOW-UP (2026-11-06) — hover "shine light" affordances + human status lines
 

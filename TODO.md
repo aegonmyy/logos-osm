@@ -74,6 +74,14 @@ let them slip behind this roadmap.
 
 ## Wave 3 — consumer experience
 
+- [ ] **Regions tab display optimization.** The Regions tab (tab index 1)
+      renders the 72-region catalog with a registered-first sort and an
+      All/Registered/Not filter (`Main.qml` ~259-299), but no text search,
+      no sort-by-size/name, and the filtered view recomputes on every
+      interaction. Optimize: name search/filter, sort options (name, size,
+      registered status), cache/memoize the filtered view, and tighten row
+      density so scanning 72 entries is fast — finding one region today
+      means scrolling the whole list.
 - [ ] **Registry browser.** Read the on-chain registry (regions, mirrors,
       registrars, versions) and render it — makes the decentralized catalog
       legible without the CLI.
@@ -90,6 +98,17 @@ let them slip behind this roadmap.
       content-derived). Script it end to end from the anchor state.
 - [ ] **Storage redundancy.** The single-VPS codex node is a hard dependency
       for fetches; mirror the region set on at least one independent node.
+- [ ] **Hosted-region availability health check (flag dead registrations).**
+      A region can be registered on-chain yet have a CID that no longer
+      resolves to bytes — e.g. when the storage node that hosted it dies
+      (the VPS codex trial ends 2026-11-24, taking every CID hosted only
+      there with it). Add a health probe: for each registered region, attempt
+      to resolve its CID on the configured storage node(s) and flag entries
+      whose CID is unresolvable as "dead" (an unhealthy status in the
+      Regions/Host tab, distinct from "not registered"). Surfaces
+      availability gaps so dead mirrors get re-hosted before anyone notices
+      a broken fetch — and pairs with the redundancy item above (redundancy
+      prevents them, this surfaces what already slipped).
 
 ## Parking lot (candidates, not scheduled)
 

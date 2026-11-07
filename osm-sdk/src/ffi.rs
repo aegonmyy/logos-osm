@@ -619,6 +619,21 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
                 })
                 .collect::<Vec<_>>())
         }),
+        // Drop every RUNNING job from the registry. The worker threads can't
+        // be killed mid-download (std::thread, no cancel token), but removing
+        // the job from the table means: (a) running_long_job() returns None so
+        // a new host/fetch can start immediately, and (b) when the orphaned
+        // thread finishes it finds its id gone and silently discards the
+        // result. From the UI's view the cleared task has stopped.
+        "clear_jobs" => {
+            let mut dropped = 0;
+            if let Ok(mut g) = JOBS.lock() {
+                let before = g.len();
+                g.retain(|j| j.state != "running");
+                dropped = before - g.len();
+            }
+            ok(json!({ "cleared": dropped }))
+        }
         other => err(format!("unknown op: {other}")),
     }
 }
@@ -776,7 +791,7 @@ fn op_host(args: &Value) -> *mut c_char {
         // most one download/stream is in flight.
         if let Some(existing) = running_long_job() {
             return err(format!(
-                "a long job is already running ({existing}); wait for it to finish"
+                "a long job is already running ({existing}); wait for it to finish, or clear tasks to stop it and start a new one"
             ));
         }
         let job_region = region.clone();
@@ -1075,7 +1090,7 @@ fn op_fetch(args: &Value) -> *mut c_char {
         // One long job at a time — same rationale as op_host's guard.
         if let Some(existing) = running_long_job() {
             return err(format!(
-                "a long job is already running ({existing}); wait for it to finish"
+                "a long job is already running ({existing}); wait for it to finish, or clear tasks to stop it and start a new one"
             ));
         }
         let (jr, jc, jm) = (region.clone(), cid.clone(), checksum);

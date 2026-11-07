@@ -233,7 +233,7 @@ Item {
     function jobProgressText(p) {
         const phase = p.phase_label || "working"
         const done = root.fmtBytes(p.done || 0)
-        const total = (p.total || 0) > 0 ? root.fmtBytes(p.total) : "—"
+        const total = (p.total || 0) > 0 ? root.fmtBytes(p.total) : "-"
         let t = phase + " " + done + " / " + total
         if ((p.total || 0) > 0)
             t += " · " + Math.min(100, Math.floor(100 * (p.done || 0) / p.total)) + "%"
@@ -487,15 +487,15 @@ Item {
                 const pub = res.published !== undefined && res.published !== null
                             ? "v" + res.published : ""
                 if (res.status === "up_to_date")
-                    return region + " · up to date — your file matches Geofabrik's latest"
+                    return region + " · up to date - your file matches Geofabrik's latest"
                          + (pub ? " (" + pub + ")" : "")
                 if (res.status === "update_available") {
                     const loc = res.local !== undefined && res.local !== null
                                 ? "v" + res.local : "?"
-                    return region + " · update available — " + loc + " → " + (pub || "?")
+                    return region + " · update available - " + loc + " → " + (pub || "?")
                 }
                 if (res.status === "not_imported")
-                    return region + " · not in your catalog yet — latest published "
+                    return region + " · not in your catalog yet - latest published "
                          + (pub || "?")
                 return region + " · checked"
             }
@@ -588,7 +588,7 @@ Item {
             root.jobStatusMisses++
             if (root.jobStatusMisses >= root.jobStatusMissLimit) {
                 root.failRunningJobs(
-                    "module not responding — it may have crashed; restart Basecamp")
+                    "module not responding - it may have crashed; restart Basecamp")
                 return
             }
         }
@@ -719,6 +719,8 @@ Item {
     // land regardless); their results are simply not shown. Also unsticks
     // the incidental UI the dropped results would have reset.
     function clearTasks() {
+        // Stop the CLIENT side: drop the host loop, job polling, and every
+        // visible task row...
         root.jobPolls = ({})
         root.jobStatusInFlight = false
         root.jobStatusPollDeadline = 0
@@ -728,6 +730,13 @@ Item {
         root.tasks = []
         if (root.sizesLoading) root.sizesLoading = false
         if (root.discoverState === "pending") root.discoverState = "ok"
+        // ...and stop the SERVER side too: clear_jobs drops every running
+        // job from the core's registry, so a cleared fetch/host actually
+        // stops being tracked (its result is discarded when the orphaned
+        // worker finishes) and a new identical action can start right
+        // away instead of hitting the "already running" refusal.
+        // Direct invokeOp, not call(): bookkeeping, not a tracked task.
+        if (root.bk) root.bk.invokeOp("clear_jobs", JSON.stringify({}))
     }
 
     // Runs from onOpResult for op "host" while a run is active; the
@@ -915,7 +924,7 @@ Item {
                                + root.fmtBytes(root.hostBytes) + " · "
                                + reg + "/" + root.hostRunCheck.length
                                + (reg < root.hostRunCheck.length
-                                  ? " registered — finish with the CLI wallet"
+                                  ? " registered - finish with the CLI wallet"
                                   : " registered ✓")
                     })
                 }
@@ -1019,20 +1028,20 @@ Item {
     }
 
     // ---- Logos identity tokens (from logos.co live CSS) ------------------
-    readonly property color cCanvas:   "#152521"                            // brand dark green — the canvas
+    readonly property color cCanvas:   "#152521"                            // brand dark green - the canvas
     readonly property color cInk:      "#f5f5ef"                            // brand off-white
-    readonly property color cAccent:   "#ffd328"                            // brand yellow — the one accent
-    readonly property color cTan:      "#e2e0c9"                            // accent tan — secondary surfaces
-    readonly property color cTeal:     "#5f797c"                            // steel teal — muted accents
-    readonly property color cInfo:     "#c6ebf7"                            // light blue — info, links
-    readonly property color cInfoHi:   "#e4f6fd"                            // brighter info — link hover
-    readonly property color cBrown:    "#a18863"                            // brown — error / read-failed status
+    readonly property color cAccent:   "#ffd328"                            // brand yellow - the one accent
+    readonly property color cTan:      "#e2e0c9"                            // accent tan - secondary surfaces
+    readonly property color cTeal:     "#5f797c"                            // steel teal - muted accents
+    readonly property color cInfo:     "#c6ebf7"                            // light blue - info, links
+    readonly property color cInfoHi:   "#e4f6fd"                            // brighter info - link hover
+    readonly property color cBrown:    "#a18863"                            // brown - error / read-failed status
     // Validation/reachability tones, kept quiet on the dark-green canvas:
     // amber for "fixable wrong", soft green for confirmed, soft red for
     // unreachable. Derived from the same saturation band as cTeal/cBrown.
-    readonly property color cWarn:     "#c9a23f"                            // amber — invalid input, registry unreachable
-    readonly property color cGood:     "#8fb573"                            // soft green — valid input, storage reachable
-    readonly property color cBad:      "#c0654e"                            // soft red — storage unreachable
+    readonly property color cWarn:     "#c9a23f"                            // amber - invalid input, registry unreachable
+    readonly property color cGood:     "#8fb573"                            // soft green - valid input, storage reachable
+    readonly property color cBad:      "#c0654e"                            // soft red - storage unreachable
 
     // Derived translucent overlays of the same tones.
     readonly property color cPanel:    Qt.rgba(0.886, 0.878, 0.788, 0.05)   // tan at 5%  — panels
@@ -1041,7 +1050,7 @@ Item {
     readonly property color cHairSoft: Qt.rgba(0.961, 0.961, 0.941, 0.07)   // softer hairline
     readonly property color cMuted:    Qt.rgba(0.961, 0.961, 0.941, 0.55)   // muted ink
     readonly property color cFaint:    Qt.rgba(0.961, 0.961, 0.941, 0.34)   // faint ink
-    readonly property color cConsole:  "#0b1512"                            // darker green — output console
+    readonly property color cConsole:  "#0b1512"                            // darker green - output console
 
     // ---- Typography -------------------------------------------------------
     // Public Sans (UI text), Fira Mono (machine values: hex ids, CIDs, MD5s,
@@ -1216,7 +1225,7 @@ Item {
         property string label: ""
         property string caption: ""          // "" hides the caption line
         property color captionColor: root.cMuted
-        property string dot: ""              // "ok" | "down" | "" — after the label
+        property string dot: ""              // "ok" | "down" | "" - after the label
         property string info: ""             // ⓘ tooltip text on the label
         default property alias fieldData: slot.data
         Layout.fillWidth: true
@@ -1724,7 +1733,7 @@ Item {
             anchors.fill: parent
             anchors.margins: 14
             anchors.topMargin: 36
-            text: "No output yet — run an operation above."
+            text: "No output yet - run an operation above."
             font.family: root.fSans
             font.pixelSize: 12
             color: root.cFaint
@@ -1816,7 +1825,7 @@ Item {
                         // not the raw JSON (hover shows the full payload).
                         text: {
                             const v = root.coreVersion()
-                            return v.length ? "✓ v" + v : "—"
+                            return v.length ? "✓ v" + v : "-"
                         }
                         font.family: root.fMono
                         font.pixelSize: 11
@@ -1832,7 +1841,7 @@ Item {
                     ToolTip.visible: containsMouse
                     ToolTip.text: root.osmVersion.length
                                    ? root.osmVersion
-                                   : "core not loaded — click to re-run the Geofabrik cross-check"
+                                   : "core not loaded - click to re-run the Geofabrik cross-check"
                     ToolTip.delay: 300
                     hoverEnabled: true
                 }
@@ -1878,7 +1887,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.runDiscover()
                     ToolTip.visible: containsMouse
-                    ToolTip.text: root.discoverState === "error" ? root.discoverError : "Live Geofabrik cross-check — click to refresh"
+                    ToolTip.text: root.discoverState === "error" ? root.discoverError : "Live Geofabrik cross-check - click to refresh"
                     hoverEnabled: true
                 }
             }
@@ -1930,7 +1939,7 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: tasksPanel.opened ? tasksPanel.close() : tasksPanel.open()
                     ToolTip.visible: containsMouse
-                    ToolTip.text: "Ongoing tasks — every op the app fires, with its result"
+                    ToolTip.text: "Ongoing tasks - every op the app fires, with its result"
                     hoverEnabled: true
                 }
                 Popup {
@@ -1968,15 +1977,17 @@ Item {
                             Item { Layout.fillWidth: true }
                             SButton {
                                 // Stops the host loop and job polling, drops
-                                // completed rows. In-flight jobs keep running
-                                // server-side; their results are not shown.
+                                // every row, and clears the core's running-job
+                                // registry so the cleared work is no longer
+                                // tracked and a new identical action can start
+                                // immediately.
                                 text: "Clear"
                                 font.pixelSize: 9
                                 topPadding: 2; bottomPadding: 2
                                 leftPadding: 8; rightPadding: 8
                                 onClicked: root.clearTasks()
                                 ToolTip.visible: hovered
-                                ToolTip.text: "Stop incomplete tasks and clear the list"
+                                ToolTip.text: "Stop running tasks (client + core) and clear the list - safe to start the same action fresh"
                             }
                             Text {
                                 text: root.tasks.length + " tracked"
@@ -2083,7 +2094,7 @@ Item {
                             Text {
                                 visible: root.tasks.length === 0
                                 anchors.centerIn: parent
-                                text: "No tasks yet — every op the app fires\nshows up here with its result."
+                                text: "No tasks yet - every op the app fires\nshows up here with its result."
                                 horizontalAlignment: Text.AlignHCenter
                                 font.family: root.fSans
                                 font.pixelSize: 12
@@ -2199,7 +2210,7 @@ Item {
                                    : (root.storageReach === "fail" ? "down" : "")
                                 caption: (storageUrl.text.length === 0
                                           || storageUrl.text === "http://127.0.0.1:8080")
-                                         ? "Your local Logos Storage node — leave as-is unless you're pointing at a remote one."
+                                         ? "Your local Logos Storage node - leave as-is unless you're pointing at a remote one."
                                          : ""
                                 PersistField { id: storageUrl; text: "http://127.0.0.1:8080" }
                             }
@@ -2223,11 +2234,11 @@ Item {
                             }
                             FieldCell {
                                 label: "REGISTRAR (HEX, 32B)"
-                                info: "A registrar is the public ID of the account that files registrations — anyone can be one. The app never sees private keys: it builds the transaction, your wallet signs it."
+                                info: "A registrar is the public ID of the account that files registrations - anyone can be one. The app never sees private keys: it builds the transaction, your wallet signs it."
                                 caption: {
                                     const t = registrar.text.trim()
                                     if (t.length === 0)
-                                        return "The wallet account that signs your registrations — paste your account ID (64 hex characters). Find it in your wallet app under account details."
+                                        return "The wallet account that signs your registrations - paste your account ID (64 hex characters). Find it in your wallet app under account details."
                                     return /^[0-9a-fA-F]{64}$/.test(t)
                                            ? "✓ 64 hex characters"
                                            : "needs 64 hex characters"
@@ -2263,7 +2274,7 @@ Item {
                     Section {
                         id: secHost
                         numeral: "02"
-                        heading: "Fetch (Geofabrik → verify MD5 → your storage node)"
+                        heading: "Fetch"
 
                     // Selected regions as pinned chips with × to cancel.
                     Flow {
@@ -2344,9 +2355,9 @@ Item {
                                 const sel = root.selectedRegions
                                 const bytes = root.bytesOf(sel)
                                 return "Fetch selected  (" + sel.length + " · " +
-                                       (bytes ? root.fmtBytes(bytes) : "—") + ")"
+                                       (bytes ? root.fmtBytes(bytes) : "-") + ")"
                             }
-                            tip: "Downloads each selected region from Geofabrik, verifies it, and stores it on Logos Storage — hosting it for everyone. Runs one at a time in the background (the heavy lifting)."
+                            tip: "Downloads each selected region from Geofabrik, verifies it, and stores it on Logos Storage - hosting it for everyone. Runs one at a time in the background (the heavy lifting)."
                             onClicked: root.startHostRun(root.selectedRegions)
                         }
                         SButton {
@@ -2360,7 +2371,7 @@ Item {
                                 return "Fetch all except selected  (" + keep.length +
                                        (bytes ? " · " + root.fmtBytes(bytes) : "") + ")"
                             }
-                            tip: "Fetches every region EXCEPT the ones you selected — handy for hosting a whole continent minus what you already have."
+                            tip: "Fetches every region EXCEPT the ones you selected - handy for hosting a whole continent minus what you already have."
                             onClicked: root.startHostRun(
                                 root.regionList.map(g => g.path)
                                     .filter(p => root.selectedRegions.indexOf(p) < 0))
@@ -2374,9 +2385,9 @@ Item {
                                 const todo = all.filter(p => root.hostedRegions.indexOf(p) < 0)
                                 const bytes = root.bytesOf(todo)
                                 return "Fetch all  (" + todo.length + " new · " +
-                                       (bytes ? root.fmtBytes(bytes) : "—") + ")"
+                                       (bytes ? root.fmtBytes(bytes) : "-") + ")"
                             }
-                            tip: "Fetches every region you haven't hosted yet (skips ones already in your catalog). Big total — expect a long run."
+                            tip: "Fetches every region you haven't hosted yet (skips ones already in your catalog). Big total - expect a long run."
                             onClicked: root.startHostRun(
                                 root.regionList.map(g => g.path)
                                     .filter(p => root.hostedRegions.indexOf(p) < 0))
@@ -2406,7 +2417,7 @@ Item {
                             spacing: 8
                             Text {
                                 Layout.fillWidth: true
-                                text: "Finish on-chain — " + root.lastRunPending.length
+                                text: "Finish on-chain - " + root.lastRunPending.length
                                       + (root.lastRunPending.length > 1 ? " regions" : " region")
                                       + " fetched but not registered"
                                 font.family: root.fSerif
@@ -2475,7 +2486,7 @@ Item {
                                 Item { Layout.fillWidth: true }
                                 SButton {
                                     text: "re-check registry"
-                                    tip: "Re-reads the on-chain registry for the regions you just fetched but haven't registered yet — confirms whether the wallet's sign+submit went through."
+                                    tip: "Re-reads the on-chain registry for the regions you just fetched but haven't registered yet - confirms whether the wallet's sign+submit went through."
                                     onClicked: root.call("lookup_bulk", {
                                         regions: root.lastRunPending.join(",")
                                     })
@@ -2529,7 +2540,7 @@ Item {
                     Item { Layout.fillWidth: true }
                     SButton {
                         text: "Re-check"
-                        tip: "Re-reads the on-chain registry for every cataloged region — refreshes the registered/not-registered badges across the table."
+                        tip: "Re-reads the on-chain registry for every cataloged region - refreshes the registered/not-registered badges across the table."
                         onClicked: root.call("lookup_bulk", {})
                     }
                     PButton {
@@ -2676,7 +2687,7 @@ Item {
                                                    ? " · v" + model.latest : ""))
                                               : (model.error && model.error.length > 0
                                                  ? "read failed"
-                                                 : "—")
+                                                 : "-")
                                         font.family: model.registered || (model.error && model.error.length > 0)
                                                       ? root.fMono : root.fSans
                                         font.pixelSize: 12
@@ -2744,7 +2755,7 @@ Item {
                     Section {
                         id: secFetch
                         numeral: "01"
-                        heading: "Restore a registered snapshot (storage → verify → import)"
+                        heading: "Restore"
 
                         Rectangle {
                             visible: root.fetchRegion !== ""
@@ -2806,13 +2817,13 @@ Item {
                             rowSpacing: 12
                             FieldCell {
                                 label: "CID"
-                                info: "The content ID of the snapshot on Logos Storage. Auto-filled from the on-chain registry when you pick a region — it identifies the exact bytes to fetch."
+                                info: "The content ID of the snapshot on Logos Storage. Auto-filled from the on-chain registry when you pick a region - it identifies the exact bytes to fetch."
                                 caption: {
                                     switch (root.fetchFillState) {
                                         case "ok":            return "from registry ✓"
                                         case "pending":       return "reading the registry…"
-                                        case "unregistered":  return "not on the registry yet — nothing to fetch"
-                                        case "unreachable":   return "registry unreachable — enter manually"
+                                        case "unregistered":  return "not on the registry yet - nothing to fetch"
+                                        case "unreachable":   return "registry unreachable - enter manually"
                                         default:              return "auto-filled from the registry when you pick a region"
                                     }
                                 }
@@ -2829,8 +2840,8 @@ Item {
                             }
                             FieldCell {
                                 label: "PUBLISHED MD5 (HEX)"
-                                info: "The checksum recorded on-chain for this snapshot. The restore verifies the downloaded file against this — a mismatch means the data was tampered with or changed since registration."
-                                caption: "the registered checksum — auto-filled"
+                                info: "The checksum recorded on-chain for this snapshot. The restore verifies the downloaded file against this - a mismatch means the data was tampered with or changed since registration."
+                                caption: "the registered checksum - auto-filled"
                                 MonoField {
                                     id: fMd5
                                     objectName: "fMd5"
@@ -2909,7 +2920,7 @@ Item {
                                 text: (root.importRegion === "")
                                       ? (root.sizesLoading ? "Select region  (sizes loading…)" : "Select region ▾")
                                       : (root.importRegion + " ▾")
-                                tip: "Pick which region your local PBF file is for — import matches it to the right catalog entry."
+                                tip: "Pick which region your local PBF file is for - import matches it to the right catalog entry."
                                 onClicked: importPicker.open()
                                 RegionPickPopup {
                                     id: importPicker
@@ -2947,7 +2958,7 @@ Item {
                                 enabled: root.importRegion !== "" && impPath.text.trim().length > 0
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Import (validate + catalog)"
-                                tip: "Validates the local PBF file and records it in your local catalog. No network, no storage node, no chain — purely local bookkeeping."
+                                tip: "Validates the local PBF file and records it in your local catalog. No network, no storage node, no chain - purely local bookkeeping."
                                 onClicked: root.call("import", {
                                     region: root.importRegion,
                                     pbf: impPath.text.trim()
@@ -2960,7 +2971,7 @@ Item {
                                 enabled: root.importRegion !== "" && impPath.text.trim().length > 0
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Verify + store + register tx"
-                                tip: "Full workflow: verifies the file against Geofabrik's official published MD5, stores it on Logos Storage (gets a CID), and builds the registration transaction — the wallet signs it (no keys here)."
+                                tip: "Full workflow: verifies the file against Geofabrik's official published MD5, stores it on Logos Storage (gets a CID), and builds the registration transaction - the wallet signs it (no keys here)."
                                 onClicked: root.call("import", {
                                     region: root.importRegion,
                                     pbf: impPath.text.trim(),
@@ -3033,7 +3044,7 @@ Item {
                                 enabled: root.updateRegion !== ""
                                 opacity: enabled ? 1.0 : 0.4
                                 text: "Check for newer snapshot"
-                                tip: "Compares your local version against Geofabrik's latest published snapshot for this region — tells you when it's time to re-fetch (and re-register) fresh data."
+                                tip: "Compares your local version against Geofabrik's latest published snapshot for this region - tells you when it's time to re-fetch (and re-register) fresh data."
                                 onClicked: root.call("update", {
                                     region: root.updateRegion
                                 })
