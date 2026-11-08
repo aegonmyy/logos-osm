@@ -195,7 +195,7 @@ Both modules are published, so Basecamp can install them without a local
 build. Add this catalog to the module repo list:
 
 ```
-https://github.com/aegonmyy/logos-modules-release-base/raw/main/logos-repo.json
+https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
 ```
 
 It serves `osm` (the SDK core module) and `osm_app` (the app) for

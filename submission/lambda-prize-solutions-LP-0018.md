@@ -20,7 +20,7 @@ Geofabrik, and a host cannot silently substitute bytes.
 ## Repository
 
 - **Repo:** <https://github.com/aegonmyy/logos-osm>
-- **Module catalog:** <https://github.com/aegonmyy/logos-modules-release-base/raw/main/logos-repo.json>
+- **Module catalog:** <https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json>
 - **License:** MIT OR Apache-2.0
 
 ## Approach
