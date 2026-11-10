@@ -161,6 +161,8 @@ Testnet 0.4 deployment is pending the network launch (~2026-11-30).
 
 ## Quickstart (CLI)
 
+Full command reference with examples: [`docs/cli-reference.md`](docs/cli-reference.md).
+
 ```sh
 cargo build -p logos-osm-cli
 
