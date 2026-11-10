@@ -53,8 +53,7 @@ async fn main() -> Result<()> {
     // version printed it only at the end, so a funding failure lost the
     // phrase entirely (it is not in the storage file — only derived keys are).
     let mnemonic_path = dir.join("mnemonic.txt");
-    std::fs::write(&mnemonic_path, mnemonic.to_string())
-        .context("writing mnemonic file")?;
+    std::fs::write(&mnemonic_path, mnemonic.to_string()).context("writing mnemonic file")?;
     println!();
     println!(
         "=== RECOVERY MNEMONIC (saved to {}) — KEEP SECRET ===",

@@ -22,8 +22,8 @@ use clap::{Parser, Subcommand};
 use lee_core::account::AccountId;
 use logos_osm::regions::{Level, REGIONS};
 use logos_osm::registry::{
-    build_init, build_register_region, build_register_regions_batch, region_pda, RegionEntry,
-    OsmTxBuilt,
+    build_init, build_register_region, build_register_regions_batch, region_pda, OsmTxBuilt,
+    RegionEntry,
 };
 use logos_osm::storage::{CodexStorage, MemoryStorage};
 use logos_osm::{OsmClient, UpdateStatus};
@@ -278,7 +278,9 @@ async fn submit_register(
     }
     let overrides = WalletConfigOverrides {
         sequencer: Some(SequencerConnectionData {
-            sequencer_addr: sequencer_url.parse().context("--sequencer is not a usable URL")?,
+            sequencer_addr: sequencer_url
+                .parse()
+                .context("--sequencer is not a usable URL")?,
             basic_auth: None,
         }),
         seq_tx_poll_max_blocks: Some(200),
@@ -321,7 +323,11 @@ async fn submit_register(
     println!("sending {label} transaction ...");
     let mentions = built.mentions(signer);
     let h = wallet
-        .send_pub_tx(mentions, built.instruction.clone(), built.program_account_id)
+        .send_pub_tx(
+            mentions,
+            built.instruction.clone(),
+            built.program_account_id,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{label} send failed: {e:?}"))?;
     println!("submitted (tx {h}); awaiting inclusion ...");
@@ -536,7 +542,13 @@ async fn main() -> Result<()> {
                 Ok(())
             })?;
         }
-        Cmd::Register { region, registrar, sign, wallet_dir, wallet_password } => {
+        Cmd::Register {
+            region,
+            registrar,
+            sign,
+            wallet_dir,
+            wallet_password,
+        } => {
             let registrar = parse_account(&registrar)?;
             let sequencer = sequencer_url.clone();
             with_client!(|client: OsmClient<_>| async move {
@@ -561,14 +573,28 @@ async fn main() -> Result<()> {
                     &snap.registration(None),
                 );
                 if sign {
-                    submit_register(wallet_dir, &wallet_password, &sequencer, &built, &registrar, "RegisterRegion").await?;
+                    submit_register(
+                        wallet_dir,
+                        &wallet_password,
+                        &sequencer,
+                        &built,
+                        &registrar,
+                        "RegisterRegion",
+                    )
+                    .await?;
                 } else {
                     print_tx("RegisterRegion", &built, &registrar);
                 }
                 Ok(())
             })?;
         }
-        Cmd::RegisterBulk { regions, registrar, sign, wallet_dir, wallet_password } => {
+        Cmd::RegisterBulk {
+            regions,
+            registrar,
+            sign,
+            wallet_dir,
+            wallet_password,
+        } => {
             let registrar = parse_account(&registrar)?;
             let sequencer = sequencer_url.clone();
             let wanted: Vec<String> = regions
@@ -600,7 +626,15 @@ async fn main() -> Result<()> {
                     &regs,
                 );
                 if sign {
-                    submit_register(wallet_dir, &wallet_password, &sequencer, &built, &registrar, "RegisterRegionsBatch").await?;
+                    submit_register(
+                        wallet_dir,
+                        &wallet_password,
+                        &sequencer,
+                        &built,
+                        &registrar,
+                        "RegisterRegionsBatch",
+                    )
+                    .await?;
                 } else {
                     print_tx("RegisterRegionsBatch", &built, &registrar);
                 }
