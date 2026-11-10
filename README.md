@@ -155,8 +155,7 @@ curl -o henan.osm.pbf \
 md5sum henan.osm.pbf   # should match the on-chain checksum
 ```
 
-The earlier pre-0.3 deployment log is kept at
-`docs/demo-evidence/osm_registry_public_testnet.log` for reference.
+The earlier pre-0.3 deployment log is no longer tracked in the repo.
 Testnet 0.4 deployment is pending the network launch (~2026-11-30).
 
 ## Quickstart (CLI)
@@ -264,8 +263,8 @@ cargo test --release -p osm-integration-tests --test cycle_profile -- --ignored 
 CI (`.github/workflows/ci.yml`) runs four jobs: unit + hermetic off-chain
 lifecycle; **live e2e** (standalone Docker sequencer, real registration
 lifecycle + off-chain flow against a real Codex node); the CU cycle profile;
-and the .lgx bundle build + callable smoke. See `docs/DESIGN.md` for the
-architecture and `docs/CU_COSTS.md` for measured per-instruction costs.
+and the .lgx bundle build + callable smoke. See `docs/CU_COSTS.md` for
+measured per-instruction costs.
 
 ## License
 
