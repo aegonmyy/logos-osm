@@ -154,47 +154,43 @@ md5sum henan.osm.pbf   # should match the on-chain checksum
 
 Testnet 0.4 deployment is pending the network launch (around 2026-11-30).
 
-## Quickstart (CLI)
+## Setup
 
-Full command reference with examples: [`docs/cli-reference.md`](docs/cli-reference.md).
+This section walks through everything you need to host and register OSM
+regions: the prerequisites, installing the CLI, running a storage node, and
+your first host and register cycle. For the Basecamp app path, see
+[Basecamp app + module](#basecamp-app--module) below.
+
+### Prerequisites
+
+| Requirement | What it is | Where to get it |
+|---|---|---|
+| **Rust** (1.98+) | Compiles the CLI and SDK | [rustup.rs](https://rustup.rs) |
+| **Logos Storage (Codex)** | Stores PBF files, serves them by CID | [Storage docs](https://logos-storage-docs.netlify.app/tutorials/storage-module/) or the Docker command below |
+| **LEZ wallet** | Signs and submits registration transactions on the LEZ chain | [Run an app docs](https://docs.logos.co/run-an-app) (wallet setup) or mine/fund on testnet |
+| **Testnet LEZ** | The chain the registry is deployed on | `https://testnet.lez.logos.co` (public, read-only queries need no wallet) |
+
+You do **not** need a wallet or testnet tokens to browse the registry or
+fetch regions. You only need a funded wallet to **register** (host and write
+to the chain).
+
+### 1. Install the CLI
 
 ```sh
+git clone https://github.com/aegonmyy/logos-osm.git
+cd logos-osm
 cargo build -p logos-osm-cli
 
-export OSM_STORAGE_URL=http://127.0.0.1:8080
-export OSM_PROGRAM_ACCOUNT=D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
-
-osm regions                          # the closed set
-osm discover                         # cross-check against Geofabrik's index
-osm host germany --registrar <hex32> # download, verify MD5, store, print tx
-osm register-bulk --regions germany,france --registrar <hex32>
-osm fetch germany --cid <cid> --checksum <md5hex>
-osm update germany
-
-# read the registry straight from the chain (no wallet needed)
-osm lookup --region germany
-osm lookup --parent us
-osm lookup --cid <cid>
+# The binary is at target/release/osm (or target/debug/osm)
+# Optionally symlink it:
+sudo ln -sf "$(pwd)/target/release/osm" /usr/local/bin/osm
 ```
 
-Commands that build a registration transaction need
-`--program-account <base58>` (or `OSM_PROGRAM_ACCOUNT`). Under the v0.3
-program model a deployed program lives at an account the deployer chose, so
-PDAs and transaction targets key off that account rather than off the
-bytecode's image id.
+Full command reference: [`docs/cli-reference.md`](docs/cli-reference.md).
 
-Registration transactions are printed as JSON (the program account, the
-shard selectors, the signing account, and borsh-encoded instruction bytes)
-for the wallet to submit. The SDK builds, the wallet signs, and the SDK never
-holds keys. Pass `--sign` to have the CLI open the wallet, sign, and submit
-to the sequencer directly. The full on-chain submission is exercised
-end-to-end by `tests/tests/osm_registry_live.rs` against a standalone
-sequencer.
+### 2. Run a Logos Storage node (Codex)
 
-### Logos Storage node (Codex)
-
-The upstream image's default entrypoint is broken (`CMD ["codex"]`, no such
-binary). Run it digest-pinned with the entrypoint override:
+You need a storage node to host PBF files. The easiest way is Docker:
 
 ```sh
 docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
@@ -203,7 +199,101 @@ docker run -d --name osm-codex -p 8080:8080 -e NAT_IP_AUTO=false \
   --api-bindaddr=0.0.0.0 --api-port=8080
 ```
 
-## Basecamp app + module
+This starts a Codex storage node on port 8080. Verify it is running:
+
+```sh
+curl http://127.0.0.1:8080/api/storage/v1/data?list=true
+# Should return {"content":[]} on a fresh node
+```
+
+For the full storage setup guide, see the
+[Logos Storage module tutorial](https://logos-storage-docs.netlify.app/tutorials/storage-module/).
+
+### 3. Set up your LEZ wallet
+
+To register regions on-chain, you need a LEZ wallet with testnet tokens.
+Follow the [Run an app guide](https://docs.logos.co/run-an-app) to create a
+wallet and fund it. The CLI looks for the wallet at
+`~/.logos-osm/wallet/` by default (containing `config.json` and a `storage/`
+directory).
+
+If you just want to browse the registry or fetch regions, skip this step.
+Those operations are read-only and need no wallet.
+
+### 4. Host and register your first region
+
+Set your environment variables:
+
+```sh
+export OSM_STORAGE_URL=http://127.0.0.1:8080
+export OSM_PROGRAM_ACCOUNT=D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
+export OSM_SEQUENCER=https://testnet.lez.logos.co
+```
+
+Browse the region set (no wallet needed):
+
+```sh
+osm regions                    # the 72-region closed set
+osm regions --parent us        # US subregions
+osm lookup --region germany    # read germany's on-chain entry
+```
+
+Host a region (downloads from Geofabrik, verifies MD5, stores in your Codex
+node, prints the registration transaction):
+
+```sh
+osm host germany --registrar <your-account-hex32>
+```
+
+Register it on-chain (signs with your wallet and submits to the sequencer):
+
+```sh
+osm register germany --registrar <your-account-hex32> --sign
+```
+
+That is the full cycle. The region is now hosted in your storage node and
+registered on the LEZ chain with its CID and checksum pinned. Anyone on the
+network can look it up and fetch it.
+
+To bulk host and register multiple regions at once:
+
+```sh
+osm host-bulk --regions germany,france,spain --registrar <your-account-hex32>
+osm register-bulk --regions germany,france,spain --registrar <your-account-hex32> --sign
+```
+
+To fetch a region someone else has hosted (using the CID and checksum from
+the on-chain registry):
+
+```sh
+osm lookup --region china/henan    # get the CID and checksum
+osm fetch china/henan --cid <cid> --checksum <md5hex>
+```
+
+### 5. Or use the Basecamp app instead
+
+If you prefer a GUI over the CLI, install the modules in
+[Logos Basecamp](https://github.com/logos-co/logos-basecamp):
+
+1. Add the catalog (Settings, Package Repositories):
+   ```
+   https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
+   ```
+2. Install `osm` (the SDK) and `osm_app` (the distribution app)
+3. Point the app at your Codex node and the testnet:
+   ```
+   Storage URL:  your local Codex node (e.g. http://127.0.0.1:8080)
+   Sequencer:    https://testnet.lez.logos.co
+   Program:      D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
+   ```
+
+The app has three tabs: Host/Registrar (host and register regions), Regions
+(browse the set and see on-chain status), and Consumer (fetch, import,
+update check).
+
+Demo video: https://youtu.be/mW0M1lPDjpo
+
+## Basecamp app + module (technical)
 
 `module/` is a Logos Core module plugin (universal interface) that dlopens
 `liblogos_osm.so` and forwards ops over the FFI C ABI
@@ -215,29 +305,7 @@ catalog). It talks to the module over LogosAPIClient.
 
 `examples/consumer-app/` is the minimal embedding example: a module that
 depends on `osm` and does nothing but enumerate the set and resolve a region
-to its CID.
-
-### Install from the catalog
-
-The modules are published, so Basecamp can install them without a local
-build. Add this catalog to the module repo list:
-
-```
-https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
-```
-
-It serves `osm` (the SDK core module) and `osm_app` (the distribution app)
-for darwin-arm64, linux-amd64, linux-arm64 and windows-x86_64.
-
-Point the app at your Codex storage node and the live testnet registry:
-
-```
-Storage URL:  your local Codex node
-Sequencer:    https://testnet.lez.logos.co
-Program:      D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
-```
-
-Demo video: https://youtu.be/mW0M1lPDjpo
+to its CID. It is the shape most apps that want map data will take.
 
 ### Build locally
 
