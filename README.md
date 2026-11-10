@@ -112,23 +112,52 @@ c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79
 (Rebuild path: `tools/guest-builder` — needs the risc0 toolchain; CI embeds
 the committed artifact instead.)
 
-### Deployed on the public LEZ testnet: not currently
+### Deployed on the public LEZ testnet (v0.3)
 
-**Nothing is deployed on testnet 0.3.** The network was reset for v0.3 (the
-chain went from ~18,840 blocks back to block 1), so the registry that ran on
-the pre-0.3 testnet is gone, along with the three region entries it held.
+The registry is live on Logos testnet v0.3 with **25 verified region entries
+across 25 countries** — each entry has its Geofabrik MD5 and Logos Storage CID
+recorded on-chain, and each hosted blob can be fetched and hash-verified from
+a publicly reachable storage node.
 
-An earlier deployment was exercised end to end on the pre-0.3 testnet: deploy
-→ `Init` → `RegisterRegion(germany)` → `RegisterRegionsBatch(france,
-us/california)`, every transaction included and the state read back from
-chain (3 regions, 3 registrations). The captured log is
-`docs/demo-evidence/osm_registry_public_testnet.log`. It is kept as evidence
-that the lifecycle ran against a real network; it does not describe the
-current chain.
+| Item | Value |
+|---|---|
+| Sequencer | `https://testnet.lez.logos.co` |
+| Program account | [`D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt`](https://explorer.testnet.lez.logos.co/account/D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt) |
+| Program account (hex) | `b2fa65027d9b2540d4ac2aa4e0a38040ac03604c2201930592c547f3d65ecb43` |
+| Guest image ID | `c272ec3c2fe93c809d0381533511aff676e4667cbefb52eb150cca30fba98e79` |
+| Registrar (signer) | `4287ea6f05d6736f5ae9167a6f3dd46ef858aee54aba295cd547117e53e204b4` |
+| Public storage node | `http://185.227.110.22` (read-only; writes blocked) |
+| Hosted blobs | 29 PBF snapshots (42 total including test artifacts) |
 
-Redeploying on 0.3 is blocked on a funded payer account, which the testnet
-does not hand out. See [docs/TESTNET_FUNDING.md](docs/TESTNET_FUNDING.md) for
-what was tried and what the deployment needs.
+#### Registered regions (25 entries, 25 countries)
+
+**24 country-level entries:** Switzerland, Denmark, Portugal, Greece, Hungary,
+Romania, Bulgaria, Belarus, Mexico, South Korea, Thailand, Vietnam,
+Philippines, Pakistan, Bangladesh, Iran, Argentina, Colombia, Peru, Chile,
+South Africa, Egypt, Kenya, Morocco, Ethiopia.
+
+**1 subregion:** `china/henan` (3 mirrors — versions 20261106, 20261108 and
+20261109; the latest is the current snapshot on the storage node).
+
+Read any entry directly from the chain:
+
+```sh
+osm --program-account D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt \
+   --sequencer https://testnet.lez.logos.co \
+   lookup --region china/henan
+```
+
+Fetch a hosted blob by its on-chain CID and verify the MD5:
+
+```sh
+curl -o henan.osm.pbf \
+  http://185.227.110.22/api/storage/v1/data/zDvZRwzkyRRYCsLTGLBuEdjYcWXEBNP1wUh559sDYr2PN98ajwT3/network/stream
+md5sum henan.osm.pbf   # should match the on-chain checksum
+```
+
+The earlier pre-0.3 deployment log is kept at
+`docs/demo-evidence/osm_registry_public_testnet.log` for reference.
+Testnet 0.4 deployment is pending the network launch (~2026-11-30).
 
 ## Quickstart (CLI)
 
@@ -137,6 +166,7 @@ cargo build -p logos-osm-cli
 
 # against a local Codex node (see below); --memory-storage works offline
 export OSM_STORAGE_URL=http://127.0.0.1:8080
+export OSM_PROGRAM_ACCOUNT=D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
 
 osm regions                          # the closed set
 osm discover                         # cross-check against Geofabrik's index
@@ -191,15 +221,26 @@ to its CID.
 
 ### Install from the catalog
 
-Both modules are published, so Basecamp can install them without a local
-build. Add this catalog to the module repo list:
+All three modules are published, so Basecamp can install them without a
+local build. Add this catalog to the module repo list:
 
 ```
 https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
 ```
 
-It serves `osm` (the SDK core module) and `osm_app` (the app) for
-darwin-arm64, linux-amd64, linux-arm64 and windows-x86_64.
+It serves `osm` (the SDK core module), `osm_app` (the distribution app), and
+`osm_consumer` (the minimal embedding example) for darwin-arm64, linux-amd64,
+linux-arm64 and windows-x86_64.
+
+Point the app at the public storage node and the live testnet registry:
+
+```
+Storage URL:  http://185.227.110.22
+Sequencer:    https://testnet.lez.logos.co
+Program:      D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
+```
+
+Demo video: https://youtu.be/mW0M1lPDjpo
 
 ### Build locally
 
