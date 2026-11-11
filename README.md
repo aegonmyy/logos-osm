@@ -279,7 +279,9 @@ If you prefer a GUI over the CLI, install the modules in
    ```
    https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
    ```
-2. Install `osm` (the SDK) and `osm_app` (the distribution app)
+2. Install `osm` (the SDK) and `osm_app` (the distribution app).
+   If you only need to resolve regions to their CIDs without the full
+   distribution app, install `osm` and `osm_consumer` instead.
 3. Point the app at your Codex node and the testnet:
    ```
    Storage URL:  your local Codex node (e.g. http://127.0.0.1:8080)
@@ -305,7 +307,9 @@ catalog). It talks to the module over LogosAPIClient.
 
 `examples/consumer-app/` is the minimal embedding example: a module that
 depends on `osm` and does nothing but enumerate the set and resolve a region
-to its CID. It is the shape most apps that want map data will take.
+to its CID. It is the shape most apps that want map data will take. It is
+published to the catalog as `osm_consumer` v1.0.0, so you can install it in
+Basecamp alongside `osm` without building from source.
 
 ### Build locally
 
