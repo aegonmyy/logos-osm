@@ -1,21 +1,18 @@
 # OSM on Logos: decentralized OpenStreetMap distribution (LP-0018)
 
-A pipeline that mirrors [OpenStreetMap extracts](https://download.geofabrik.de)
-into **Logos Storage** and registers them on a **LEZ on-chain registry**, so
-map data is served from the Logos network with verifiable integrity and
-queryable provenance instead of from one host's HTTP server.
+OpenStreetMap is the free, community-built map of the world. But to download
+chunks of it, almost everyone depends on one host: Geofabrik. This project
+puts that same map data on the Logos network instead, with each region's
+checksum pinned on-chain so anyone can host a copy, verify it hasn't been
+tampered with, and fetch it without trusting a single server.
 
-```
-Geofabrik PBF -> MD5 verify -> stream to Logos Storage (CID)
-                       |              |
-                       |              v
-                       |     LEZ registry program
-                       |     (region -> mirrors, versions)
-                       v              |
-                published MD5         v
-                recorded on-chain   consumer: fetch by CID,
-                                   re-verify MD5, import, update-check
-```
+25 regions across 25 countries are live on the Logos testnet right now. The
+registry is deployed on testnet v0.3, and each region's map data is stored on
+a Logos Storage node with its checksum recorded on-chain. You can browse the
+registry, fetch any region, and verify the data yourself without a wallet.
+
+Public storage node: `http://185.22.110.22` (read-only)
+Sequencer: `https://testnet.lez.logos.co`
 
 ## What it does
 
