@@ -10,7 +10,7 @@ let them slip behind this roadmap.
 
 ## Wave 1 — onboarding (remove the CLI and local-node hassle)
 
-- [ ] **Account format auto-conversion.** Every account field
+- [x] **Account format auto-conversion.** *(shipped v1.5.0)* — Every account field
       (`registrar_hex`, `owner_hex`, `program_account_hex`) parses hex only,
       but LEZ wallets display accounts in base58 (`AccountId` Display is
       plain base58, bitcoin alphabet, no checksum — `account.rs:300`), so
@@ -45,7 +45,7 @@ let them slip behind this roadmap.
         remote nodes (local-loopback assumptions break over a VPS link);
         streamed byte progress already exists, keep it.
       - Optional: https/credentials once remote nodes serve them.
-- [ ] **Post-fetch "Finish on-chain" card is problematic.** After a
+- [x] **Post-fetch "Finish on-chain" card is problematic.** *(shipped v1.5.0; in-app signing still pending the wallet item)* — After a
       Consumer-tab fetch, a banner appears (Main.qml ~2324, driven by
       `lastRunPending`) instructing: "Copy the command for each region, run
       it in the LEZ wallet CLI, then re-check." A consumer who just wanted

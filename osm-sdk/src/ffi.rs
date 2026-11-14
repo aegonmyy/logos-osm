@@ -460,13 +460,23 @@ where
 // Transaction JSON (for the wallet to submit — mirrors the CLI's TxCmd)
 // ---------------------------------------------------------------------------
 
-fn account_from_hex(hex_str: &str) -> anyhow::Result<lee_core::account::AccountId> {
-    let bytes = hex::decode(hex_str.trim()).map_err(|e| anyhow::anyhow!("account hex: {e}"))?;
-    let arr: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("account id must be 32 bytes, got {}", bytes.len()))?;
-    Ok(lee_core::account::AccountId::new(arr))
+fn parse_account(s: &str) -> anyhow::Result<lee_core::account::AccountId> {
+    // Accept EITHER the 32-byte hex form the app uses internally OR the base58
+    // Display form a LEZ wallet shows (AccountId::Display is plain base58,
+    // bitcoin alphabet, no checksum). A user pasting exactly what their wallet
+    // prints should never hit "invalid hex."
+    let s = s.trim();
+    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        let bytes = hex::decode(s).map_err(|e| anyhow::anyhow!("account hex: {e}"))?;
+        let arr: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("account id must be 32 bytes, got {}", bytes.len()))?;
+        return Ok(lee_core::account::AccountId::new(arr));
+    }
+    // Otherwise the base58 form wallets display (AccountId implements FromStr).
+    s.parse::<lee_core::account::AccountId>()
+        .map_err(|e| anyhow::anyhow!("account id must be 32-byte hex or base58: {e}"))
 }
 
 /// The configured deployed program account, or an error telling the caller to
@@ -478,7 +488,7 @@ fn require_program_account(st: &AppState) -> anyhow::Result<lee_core::account::A
              address the deployment returned"
         );
     }
-    account_from_hex(&st.program_account_hex)
+    parse_account(&st.program_account_hex)
 }
 
 /// The wallet-submittable form of a built tx: the program account (target),
@@ -687,7 +697,7 @@ fn op_open(args: &Value) -> *mut c_char {
     }
     if let Some(v) = str_arg(args, "program_account_hex") {
         // Validate early so a typo can't poison every later tx build.
-        if let Err(e) = account_from_hex(&v) {
+        if let Err(e) = parse_account(&v) {
             return err(format!("program_account_hex: {e}"));
         }
         st.program_account_hex = v;
@@ -696,7 +706,7 @@ fn op_open(args: &Value) -> *mut c_char {
     // 64-hex account id — refuse to persist a typo that would then poison
     // every later registration the app pre-fills from state.
     if let Some(v) = str_arg(args, "registrar_hex").filter(|s| !s.is_empty()) {
-        if let Err(e) = account_from_hex(&v) {
+        if let Err(e) = parse_account(&v) {
             return err(format!("registrar_hex: {e}"));
         }
         st.registrar_hex = v;
@@ -772,7 +782,7 @@ fn op_host(args: &Value) -> *mut c_char {
         return err("host requires region");
     };
     let registrar = match str_arg(args, "registrar_hex") {
-        Some(h) => match account_from_hex(&h) {
+        Some(h) => match parse_account(&h) {
             Ok(a) => Some(a),
             Err(e) => return err(format!("registrar_hex: {e}")),
         },
@@ -977,7 +987,7 @@ fn op_register(args: &Value) -> *mut c_char {
     let Some(reg_hex) = str_arg(args, "registrar_hex") else {
         return err("register requires registrar_hex (32 bytes hex)");
     };
-    let registrar = match account_from_hex(&reg_hex) {
+    let registrar = match parse_account(&reg_hex) {
         Ok(a) => a,
         Err(e) => return err(format!("registrar_hex: {e}")),
     };
@@ -1013,7 +1023,7 @@ fn op_register_bulk(args: &Value) -> *mut c_char {
     let Some(reg_hex) = str_arg(args, "registrar_hex") else {
         return err("register_bulk requires registrar_hex (32 bytes hex)");
     };
-    let registrar = match account_from_hex(&reg_hex) {
+    let registrar = match parse_account(&reg_hex) {
         Ok(a) => a,
         Err(e) => return err(format!("registrar_hex: {e}")),
     };
@@ -1050,7 +1060,7 @@ fn op_init(args: &Value) -> *mut c_char {
     let Some(owner_hex) = str_arg(args, "owner_hex") else {
         return err("init requires owner_hex (32 bytes hex)");
     };
-    let owner = match account_from_hex(&owner_hex) {
+    let owner = match parse_account(&owner_hex) {
         Ok(a) => a,
         Err(e) => return err(format!("owner_hex: {e}")),
     };
@@ -1147,7 +1157,7 @@ fn op_import(args: &Value) -> *mut c_char {
     // `registrar_hex` — return the registration tx.
     let store = args.get("store").and_then(Value::as_bool).unwrap_or(false);
     let registrar = match str_arg(args, "registrar_hex") {
-        Some(h) => match account_from_hex(&h) {
+        Some(h) => match parse_account(&h) {
             Ok(a) => Some(a),
             Err(e) => return err(format!("registrar_hex: {e}")),
         },
@@ -1507,9 +1517,12 @@ mod tests {
     fn program_account_round_trip() {
         // The configured program account parses back to the same 32 bytes.
         let hex_id = "0f".repeat(32);
-        let a = account_from_hex(&hex_id).unwrap();
+        let a = parse_account(&hex_id).unwrap();
         assert_eq!(hex::encode(a.value()), hex_id);
-        assert!(account_from_hex("0123").is_err());
+        // The base58 Display form a wallet shows parses back to the same account.
+        let b = parse_account(&a.to_string()).unwrap();
+        assert_eq!(a.value(), b.value());
+        assert!(parse_account("0123").is_err());
     }
 
     /// `lookup_bulk` against an unreachable sequencer: the op still succeeds

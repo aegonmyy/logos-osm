@@ -45,15 +45,22 @@ cargo test -p logos-osm --lib        # expect 42 passed, 1 ignored
 
 CI enforces `cargo fmt` — an unformatted tree fails the "Build + unit tests" job. Always `cargo fmt` first.
 
-### 2. Bump the version (ALL THREE files) — and STAGE them
+### 2. Bump the version (FIVE files) — and STAGE them
+
+The UI shows `env!("CARGO_PKG_VERSION")` (workspace `Cargo.toml`) and the app
+plugin's `version()` — if these don't match the metadata, the version chip in
+the app drifts (it sat at 0.1.0 / 1.0.0 while metadata was at 1.4.0). Bump all
+five to the same number:
 
 ```sh
 OLD=1.4.0; NEW=1.5.0   # set these
 for f in metadata.json module/metadata.json app/metadata.json; do
   sed -i "s/\"version\": *\"$OLD\"/\"version\": \"$NEW\"/" "$f"
 done
-grep -H '"version"' metadata.json module/metadata.json app/metadata.json   # sanity check
-git add metadata.json module/metadata.json app/metadata.json               # CRITICAL — see gotcha #1
+sed -i "0,/^version = \"$OLD\"/s//version = \"$NEW\"/" Cargo.toml          # workspace version (CARGO_PKG_VERSION)
+sed -i "s/QStringLiteral(\"[0-9.]*\")/QStringLiteral(\"$NEW\")/" app/src/osm_app_plugin.h  # app plugin version()
+grep -H '"version"' metadata.json module/metadata.json app/metadata.json; grep -m1 '^version' Cargo.toml; grep 'version()' app/src/osm_app_plugin.h
+git add metadata.json module/metadata.json app/metadata.json Cargo.toml app/src/osm_app_plugin.h  # CRITICAL — see gotcha #1
 ```
 
 ### 3. Commit + push to aegonmyy
@@ -279,8 +286,8 @@ the CI badge; the Windows `.dll` is vendored at `module/vendor/x86_64-windows/lo
 cd /workspaces/workspace/logos-osm
 AE=$(grep -o 'ghp_[A-Za-z0-9]*' ~/.secrets/aegonmyy-token.env | head -1)
 AM=$(grep -o 'ghp_[A-Za-z0-9]*' ~/.secrets/ameenme-codespace-token.env | head -1)
-# bump (ALL THREE), fmt, commit, push
-cargo fmt && git add -u && git add metadata.json module/metadata.json app/metadata.json
+# bump (FIVE: 3 metadata + Cargo.toml + plugin.h), fmt, commit, push
+cargo fmt && git add -u && git add metadata.json module/metadata.json app/metadata.json Cargo.toml app/src/osm_app_plugin.h
 git commit -m "vX.Y.Z: …" && git push "https://$AE@github.com/aegonmyy/logos-osm.git" HEAD:main
 NEWSHA=$(git rev-parse HEAD)
 # submodule + dispatch

@@ -2427,7 +2427,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: "Fetching stores bytes on your device + storage node; the chain learns about a region only when a wallet-signed registration transaction is submitted. Copy the command for each region, run it in the LEZ wallet CLI, then re-check."
+                                text: "Fetching stores bytes on your device + storage node - it does NOT put them on the chain. To also record a region on-chain (optional, only if you're mirroring it), sign a registration tx with your LEZ wallet and re-check. Otherwise dismiss this - your fetched bytes are ready to use."
                                 font.family: root.fSans
                                 font.pixelSize: 11
                                 color: root.cMuted
@@ -2490,6 +2490,11 @@ Item {
                                     onClicked: root.call("lookup_bulk", {
                                         regions: root.lastRunPending.join(",")
                                     })
+                                }
+                                SButton {
+                                    text: "dismiss"
+                                    tip: "Hide this card - the fetched regions stay on your device + storage node. Reopen it by fetching again."
+                                    onClicked: root.lastRunPending = []
                                 }
                             }
                         }

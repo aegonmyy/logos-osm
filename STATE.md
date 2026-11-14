@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-07** — demo-prep polish: Clear Tasks now actually stops jobs (new `clear_jobs` op), duplicate banner hints at clearing, headings shortened, em dashes stripped from app text.
+> **Last updated: 2026-11-14** — v1.5.0: account fields accept hex OR base58; dismissible post-fetch card; UI version display fixed (workspace Cargo.toml + app plugin version bumped in sync with metadata).
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
@@ -11,12 +11,42 @@
 **SemVer** (`MAJOR.MINOR.PATCH`) from the next release onward — MINOR for new
 features, PATCH for bug fixes, MAJOR for breaking changes. `v1.3.10`
 (2026-11-06) was the last release under the old "patch-bump every ship"
-convention; the next feature ship is `v1.4.0`. The release workflow reads the
-root `metadata.json` `version` field and skips as "already-published" if it
-matches an existing release tag — so bump **all three** metadata files (root,
-`module/metadata.json`, `app/metadata.json`) together, and remember to
-`git add` them (1.3.10's first dispatch silently skipped because the bump was
-edited but never staged).
+convention. The release workflow reads the root `metadata.json` `version`
+field and skips as "already-published" if it matches an existing release tag.
+Bump **all of these to the same number** together (and `git add` them —
+1.3.10's first dispatch silently skipped because the bump was edited but never
+staged):
+- the three metadata files: root `metadata.json`, `module/metadata.json`, `app/metadata.json`
+- the workspace `Cargo.toml` `version` (what `env!("CARGO_PKG_VERSION")` / the core version chip in the UI displays)
+- `app/src/osm_app_plugin.h`'s `version()` string (the app plugin version the UI shows)
+
+## 🤝 FOLLOW-UP (2026-11-14) — v1.5.0: paste any account format, dismissible fetch card, version display fix
+
+**1. Account fields accept hex OR base58.** Every account input (registrar,
+owner, program account) previously rejected anything but 32-byte hex — but LEZ
+wallets display accounts in base58, so a user pasting exactly what their wallet
+shows hit "invalid hex". `parse_account` (ffi.rs, renamed from
+`account_from_hex`) now takes 64-char hex as-is and otherwise falls back to
+`AccountId::from_str` (the base58 Display form, bitcoin alphabet, no
+checksum). Deterministic + bijective; verified by a hex↔base58 round-trip test.
+This was Wave 1 of the TODO.
+
+**2. The post-fetch "Finish on-chain" card is dismissible + softer.** A
+consumer who just fetched bytes was pushed into a CLI registration workflow
+("Copy the command… run it in the LEZ wallet CLI"). The card now frames
+registration as optional (only for mirroring), and a **dismiss** button hides
+it — fetched bytes are usable without registering. The in-app-signing
+replacement still waits on the Wave 1 in-app wallet item. (TODO Wave 1.)
+
+**3. Version display fixed.** The UI showed stale versions: the workspace
+`Cargo.toml` was at `0.1.0` (this is what `env!("CARGO_PKG_VERSION")` / the core
+chip displays) and the app plugin's hardcoded `version()` was `1.0.0` — both
+had drifted from the release metadata (1.4.0). All now say 1.5.0 (workspace
+Cargo.toml, app plugin, metadata ×3) and must bump together going forward
+(noted in the Versioning section above + ship.md).
+
+Verified: `cargo fmt` clean; `cargo check -p logos-osm` clean; SDK tests
+42 passed, 1 ignored (the round-trip test now covers the base58 path).
 
 ## 🤝 FOLLOW-UP (2026-11-07) — demo-prep polish: Clear stops jobs, banner hints, shorter headings, no em dashes
 
