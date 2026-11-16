@@ -27,7 +27,7 @@ let them slip behind this roadmap.
       app builds unsigned txs (`tx_json`) and the user must take them to an
       external wallet — the biggest onboarding cliff for an ordinary
       developer.
-- [ ] **Adaptive genesis funding.** `fund_account_from_genesis`
+- [x] **Adaptive genesis funding.** *(committed, pending release)* — `fund_account_from_genesis`
       (tests/src/lib.rs) hardcodes genesis account A, which is depleted
       (~0.9T atomic < the 1T transfer, so txs are accepted by the sequencer
       but never land). Fold in the both-accounts/adaptive-amount approach
@@ -74,7 +74,7 @@ let them slip behind this roadmap.
 
 ## Wave 3 — consumer experience
 
-- [ ] **Regions tab display optimization.** The Regions tab (tab index 1)
+- [x] **Regions tab display optimization.** *(committed, pending release)* — The Regions tab (tab index 1)
       renders the 72-region catalog with a registered-first sort and an
       All/Registered/Not filter (`Main.qml` ~259-299), but no text search,
       no sort-by-size/name, and the filtered view recomputes on every

@@ -62,6 +62,8 @@ Item {
     // All/Registered/Not filter render from this.
     property var    regionStatuses: ({})
     property string regionFilter: "all"     // all | registered | not
+    property string regionSearch: ""        // Regions tab free-text filter (path/name substring)
+    property string regionSort: "registered" // registered | name | size
 
     // Storage reachability, from the open result: unknown | ok | fail.
     // Drives the dot next to the STORAGE label in Host §01.
@@ -80,6 +82,20 @@ Item {
 
     // Guide tab: the selected document id (see guide/GuideDocs.js).
     property string guideDoc: "how-it-works"
+
+    // ---- Search tab -------------------------------------------------------
+    // Geocode results and the miss payload (null on a hit). Search is
+    // local-only: every query runs against the per-region indexes under
+    // the cache dir, never the network.
+    property var    searchResults: []
+    property var    searchMiss: null
+    property var    searchSelected: null     // the row the detail view shows
+    property string searchSnapshot: ""       // data-url for the locator PNG
+    property bool   searchBusy: false
+    property var    reverseResult: null
+    // Rows from search_index_status: region, built, places, stale.
+    property var    indexStatuses: []
+    property bool   reverseBusy: false
 
     // ---- Ongoing tasks (the tasks panel) ---------------------------------
     // Every call() registers a task; onOpResult resolves the oldest running
@@ -262,14 +278,20 @@ Item {
     // (stable within each group by path).
     function regionRows() {
         let rows = []
+        const q = root.regionSearch.trim().toLowerCase()
         for (let i = 0; i < root.regionList.length; i++) {
             const g = root.regionList[i]
+            if (q.length > 0) {
+                const hay = (g.path + " " + g.name).toLowerCase()
+                if (!hay.includes(q)) continue
+            }
             const s = root.regionStatuses[g.path]
             rows.push({
                 path: g.path, name: g.name, level: g.level,
                 registered: s ? (s.registered === true) : false,
                 latest: (s && s.latest) ? String(s.latest) : "",
-                error: (s && s.error) ? String(s.error) : ""
+                error: (s && s.error) ? String(s.error) : "",
+                bytes: root.regionSizes[g.path] || 0
             })
         }
         if (root.regionFilter === "registered")
@@ -277,6 +299,11 @@ Item {
         else if (root.regionFilter === "not")
             rows = rows.filter(r => !r.registered)
         rows.sort((a, b) => {
+            // registered-first is the default; name + size are pure sorts.
+            if (root.regionSort === "name")
+                return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)
+            if (root.regionSort === "size")
+                return a.bytes === b.bytes ? 0 : (a.bytes < b.bytes ? -1 : 1)
             if (a.registered !== b.registered) return a.registered ? -1 : 1
             return a.path < b.path ? -1 : (a.path > b.path ? 1 : 0)
         })
@@ -292,6 +319,11 @@ Item {
     function setRegionFilter(f) {
         if (root.regionFilter === f) return
         root.regionFilter = f
+        root.rebuildRegionModel()
+    }
+    function setRegionSort(s) {
+        if (root.regionSort === s) return
+        root.regionSort = s
         root.rebuildRegionModel()
     }
 
@@ -427,6 +459,11 @@ Item {
             case "register": return region ? "register " + region : "register"
             case "register_bulk": return "register batch"
             case "host_bulk":     return "fetch bulk"
+            case "geocode":   return "search " + ((args && args.query) || "")
+            case "reverse_geocode": return "reverse lookup"
+            case "search_build":  return region ? "index " + region : "index"
+            case "search_snapshot": return "snapshot"
+            case "search_index_status": return "index status"
             case "sizes": {
                 const n = root.regionList.length > 0 ? root.regionList.length : root.regionsTotal
                 return "sizes (" + n + " regions)"
@@ -505,6 +542,27 @@ Item {
                 const unreachable = res.error_count !== undefined ? res.error_count : 0
                 return reg + "/" + total + " registered"
                      + (unreachable > 0 ? " · " + unreachable + " unreachable" : "")
+            }
+            case "geocode": {
+                const n = res.results !== undefined ? res.results.length : 0
+                const first = n > 0 ? res.results[0].name : ""
+                return n + " result" + (n === 1 ? "" : "s")
+                     + (first ? " / " + first : "")
+            }
+            case "reverse_geocode": {
+                if (!res.name) return "no place found"
+                return res.name + " / " + Math.round(res.distance_m || 0) + " m"
+            }
+            case "search_build": {
+                const rg = res.region || (t.args && t.args.region) || ""
+                const places = res.places !== undefined ? res.places : "?"
+                const secs = res.took_secs !== undefined
+                              ? " / " + res.took_secs.toFixed(0) + "s" : ""
+                return rg + " / " + places + " places" + secs
+            }
+            case "search_index_status": {
+                const n = res.count !== undefined ? res.count : "?"
+                return n + " index" + (n === 1 ? "" : "es")
             }
             default:
                 return "ok"
@@ -667,6 +725,19 @@ Item {
         delete next[j.id]
         root.jobPolls = next
         const task = root.tasks.find(x => x.id === entry.taskId)
+        // A finished fetch (or import) may have auto-spawned the region's
+        // search index build: surface it as its own task instead of letting
+        // it run dark.
+        if (j.state === "done" && j.result && j.result.index_job) {
+            const jid = j.result.index_job
+            const region = j.result.region || (task && task.args && task.args.region) || ""
+            const id = root.addTask("search_build", "index " + region)
+            const nested = Object.assign({}, root.jobPolls)
+            nested[jid] = { taskId: id, host: false }
+            root.jobPolls = nested
+            // The Search tab's index list refreshes when the nested job
+            // finishes (its own onJobStatus pass re-checks).
+        }
         if (j.state === "done") {
             if (task) root.updateTask(task.id, {
                 state: "done",
@@ -676,6 +747,11 @@ Item {
         } else {
             if (task) root.updateTask(task.id, { state: "error", summary: j.error || "failed" })
             if (entry.host) root.onHostJobError(j.error || "fetch failed")
+        }
+        // Any finished search_build refreshes the Search tab's index list
+        // (also covers the nested auto-index jobs from fetch/import).
+        if (j.op === "search_build" && j.state !== "running") {
+            root.call("search_index_status", {})
         }
     }
 
@@ -938,6 +1014,54 @@ Item {
             }
         } else if (op === "lookup") {
             root.onFetchLookupResult(r)
+        } else if (op === "geocode") {
+            root.searchBusy = false
+            if (r.ok && r.result) {
+                root.searchResults = r.result.results || []
+                root.searchMiss = r.result.miss || null
+            } else {
+                root.searchResults = []
+                root.searchMiss = {
+                    message: r.error || "search failed",
+                    hint: "", hint_has_index: false, indexed_regions: []
+                }
+            }
+            root.rebuildSearchModel()
+        } else if (op === "reverse_geocode") {
+            root.reverseBusy = false
+            root.reverseResult = r.ok ? (r.result || null)
+                                      : { error: r.error || "reverse lookup failed" }
+        } else if (op === "search_index_status") {
+            if (r.ok && r.result) {
+                root.indexStatuses = r.result.indexes || []
+                root.rebuildIndexModel()
+            }
+        } else if (op === "search_snapshot") {
+            if (r.ok && r.result && r.result.png_base64)
+                root.searchSnapshot = "data:image/png;base64," + r.result.png_base64
+        } else if (op === "search_build") {
+            // Job dispatch ack: attach the poll to the running task (same
+            // pattern as fetch).
+            if (r.ok && r.result && r.result.job_id) {
+                const t = root.runningTaskFor("search_build")
+                if (t) {
+                    const next = Object.assign({}, root.jobPolls)
+                    next[r.result.job_id] = { taskId: t.id, host: false }
+                    root.jobPolls = next
+                }
+            }
+        } else if (op === "import") {
+            // A plain import (Consumer's local PBF import) can carry a
+            // nested search_build job in its result: attach its poll so
+            // the indexing shows in the task panel instead of running dark.
+            if (r.ok && r.result && r.result.index_job) {
+                const jid = r.result.index_job
+                const id = root.addTask("search_build",
+                    "index " + (r.result.region || ""))
+                const next = Object.assign({}, root.jobPolls)
+                next[jid] = { taskId: id, host: false }
+                root.jobPolls = next
+            }
         } else if (op === "discover") {
             if (r.ok && r.result) {
                 root.regionsAvailable = r.result.available !== undefined ? r.result.available : 0
@@ -960,6 +1084,7 @@ Item {
         if (op !== "job_status" && !(r.ok && tailored)) {
             if (root.currentTab === 0)      out.outputText  = consoleText
             else if (root.currentTab === 1) outR.outputText = consoleText
+            else if (root.currentTab === 3) out3.outputText = consoleText
             else                            out2.outputText = consoleText
         }
 
@@ -999,6 +1124,114 @@ Item {
             root.fetchFillState = "unreachable"
         }
     }
+
+    // ---- Search tab -------------------------------------------------------
+    function runSearch() {
+        const q = searchQueryField.text.trim()
+        if (!q || root.searchBusy) return
+        root.searchResults = []
+        root.searchMiss = null
+        root.searchSelected = null
+        root.searchSnapshot = ""
+        root.searchBusy = true
+        root.call("geocode", { query: q, limit: 12 })
+    }
+
+    function runReverse() {
+        const lat = parseFloat(reverseLat.text.trim())
+        const lon = parseFloat(reverseLon.text.trim())
+        if (isNaN(lat) || isNaN(lon) || root.reverseBusy) return
+        root.reverseResult = null
+        root.reverseBusy = true
+        root.call("reverse_geocode", { lat: lat, lon: lon })
+    }
+
+    // Selecting a result shows its detail and fetches the locator snapshot
+    // (the PNG arrives base64 in the op result, so the sandboxed view can
+    // load it as a data URL without any file access).
+    function selectSearchResult(hit) {
+        root.searchSelected = hit
+        root.searchSnapshot = ""
+        const admin = (hit.admin_path || []).join(", ")
+        root.call("search_snapshot", {
+            region: hit.region, lat: hit.lat, lon: hit.lon,
+            label: hit.name || "", admin_path: admin
+        })
+    }
+
+    // Re-run a query with a region hint (the miss panel's suggestion).
+    function retryWithHint(region) {
+        const q = searchQueryField.text.trim()
+        const parts = q.split(",").map(s => s.trim()).filter(s => s.length > 0)
+        const subject = parts.length > 0 ? parts[0] : q
+        searchQueryField.text = subject + ", " + region
+        root.runSearch()
+    }
+
+    // Build (or rebuild) a region's index: a background job (minutes for a
+    // full country). The region's PBF must already be in the local catalog.
+    function buildIndex(region) {
+        root.call("search_build", { region: region, job: true })
+    }
+
+    // Fetching a region is a USER decision: the miss panel routes to the
+    // Consumer tab's restore flow with the region pre-picked instead of
+    // starting anything on its own.
+    function goToRestore(region) {
+        root.currentTab = 2
+        root.setFetchRegion(region)
+    }
+
+    function maybeRefreshIndexes() {
+        if (root.currentTab !== 3) return
+        if (root.indexStatuses.length === 0) root.call("search_index_status", {})
+    }
+
+    function indexStatusFor(region) {
+        for (let i = 0; i < root.indexStatuses.length; i++)
+            if (root.indexStatuses[i].region === region) return root.indexStatuses[i]
+        return null
+    }
+
+    // The regions with a built index: what a query searches.
+    function indexedRegionNames() {
+        const out = []
+        for (let i = 0; i < root.indexStatuses.length; i++) {
+            const s = root.indexStatuses[i]
+            if (s.built) out.push(s.region)
+        }
+        return out
+    }
+
+    function rebuildSearchModel() {
+        searchModel.clear()
+        for (let i = 0; i < root.searchResults.length; i++) {
+            const h = root.searchResults[i]
+            searchModel.append({
+                name: h.name || "",
+                kind: (h.class || "") + " / " + (h.subclass || ""),
+                coords: root.fmtCoord(h.lat) + ", " + root.fmtCoord(h.lon),
+                admin: (h.admin_path || []).join(" / "),
+                region: h.region || ""
+            })
+        }
+    }
+
+    function rebuildIndexModel() {
+        indexModel.clear()
+        for (let i = 0; i < root.indexStatuses.length; i++) {
+            const s = root.indexStatuses[i]
+            indexModel.append({
+                region: s.region,
+                status: s.built ? (s.stale ? "stale" : "indexed") : "not built",
+                detail: s.built
+                    ? (s.places + " places / " + root.fmtBytes(s.bytes || 0))
+                    : "imported, no index yet"
+            })
+        }
+    }
+
+    function fmtCoord(v) { return (v === undefined || v === null) ? "" : v.toFixed(4) }
 
     Connections {
         target: root.bk
@@ -1107,6 +1340,9 @@ Item {
                 // Opening the Regions tab kicks off the registry check when
                 // the session has no statuses yet.
                 if (btn.tabIndex === 1) root.maybeCheckStatuses()
+                // Opening Search refreshes which regions have local
+                // indexes (cheap and local-only, no network).
+                if (btn.tabIndex === 3) root.maybeRefreshIndexes()
             }
         }
     }
@@ -2152,7 +2388,8 @@ Item {
                 TabBtn { tabIndex: 0; label: "Fetch / Registrar" }
                 TabBtn { tabIndex: 1; label: "Regions" }
                 TabBtn { tabIndex: 2; label: "Consumer" }
-                TabBtn { tabIndex: 3; label: "Guide" }
+                TabBtn { tabIndex: 3; label: "Search" }
+                TabBtn { tabIndex: 4; label: "Guide" }
             }
             Rectangle {
                 anchors.bottom: parent.bottom
@@ -2589,6 +2826,37 @@ Item {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    // Sort: registered (default) · name · size
+                    Repeater {
+                        model: [ { id: "registered", label: "sort: registered" },
+                                 { id: "name", label: "name" },
+                                 { id: "size", label: "size" } ]
+                        delegate: Text {
+                            text: modelData.label
+                            font.family: root.fSans
+                            font.pixelSize: 11
+                            font.weight: root.regionSort === modelData.id ? Font.DemiBold : Font.Medium
+                            color: root.regionSort === modelData.id ? root.cAccent : root.cMuted
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.setRegionSort(modelData.id)
+                            }
+                        }
+                    }
+                    TextField {
+                        Layout.preferredWidth: 180
+                        font.family: root.fMono
+                        font.pixelSize: 11
+                        color: root.cTan
+                        placeholderText: "search regions..."
+                        onTextChanged: {
+                            root.regionSearch = text
+                            root.rebuildRegionModel()
+                        }
+                        background: Item {}
+                    }
                 }
 
                 Hint {
@@ -3076,6 +3344,494 @@ Item {
                 }
             }
 
+            // ============ SEARCH ============
+            // Geocode + reverse lookup over the LOCAL region indexes. Search
+            // never touches the network; a miss recommends what to do next
+            // (fetch is always an explicit user decision).
+            Flickable {
+                id: searchFlick
+                anchors.fill: parent
+                visible: root.currentTab === 3
+                clip: true
+                contentWidth: width
+                contentHeight: searchCol.implicitHeight
+                ScrollBar.vertical: ConsoleScrollBar { }
+
+                ColumnLayout {
+                    id: searchCol
+                    width: searchFlick.width - 24
+                    spacing: 24
+
+                    // -- Search --
+                    Section {
+                        id: secSearch
+                        numeral: "01"
+                        heading: "Search places"
+
+                        Hint {
+                            text: "Find places by name across the regions indexed on this machine. Type what you are looking for, optionally with a region: Yaba, Lagos."
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            TextField {
+                                id: searchQueryField
+                                Layout.fillWidth: true
+                                placeholderText: "e.g. Yaba, Lagos"
+                                font.family: root.fSans
+                                font.pixelSize: 14
+                                color: root.cInk
+                                placeholderTextColor: root.cFaint
+                                background: Rectangle {
+                                    radius: 6
+                                    color: Qt.rgba(0.961, 0.961, 0.941, 0.06)
+                                    border.width: 1
+                                    border.color: searchQueryField.activeFocus ? root.cTeal : root.cHair
+                                }
+                                onAccepted: root.runSearch()
+                            }
+                            PButton {
+                                text: root.searchBusy ? "Searching…" : "Search"
+                                enabled: !root.searchBusy && searchQueryField.text.trim().length > 0
+                                opacity: enabled ? 1.0 : 0.4
+                                tip: "Searches the local indexes of every imported region. Nothing leaves this machine."
+                                onClicked: root.runSearch()
+                            }
+                        }
+
+                        // The indexed-region caption: what a query covers.
+                        Text {
+                            visible: root.indexStatuses.length > 0
+                            Layout.fillWidth: true
+                            text: {
+                                const names = root.indexedRegionNames()
+                                if (names.length === 0)
+                                    return "No local indexes yet — import a region, then build its index below."
+                                return "Searching: " + names.join(", ")
+                            }
+                            font.family: root.fMono
+                            font.pixelSize: 11
+                            color: root.cMuted
+                            wrapMode: Text.Wrap
+                        }
+
+                        // The miss panel: honest wording (never claims a
+                        // result exists in an unfetched region) and the
+                        // three actions from the design.
+                        Rectangle {
+                            visible: root.searchMiss !== null
+                            Layout.fillWidth: true
+                            implicitHeight: missCol.implicitHeight + 24
+                            radius: 8
+                            color: Qt.rgba(0.788, 0.635, 0.243, 0.07)
+                            border.width: 1
+                            border.color: Qt.rgba(0.788, 0.635, 0.243, 0.4)
+                            ColumnLayout {
+                                id: missCol
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 10
+                                Text {
+                                    text: root.searchMiss ? root.searchMiss.message : ""
+                                    font.family: root.fSans
+                                    font.pixelSize: 13
+                                    color: root.cTan
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    visible: root.searchMiss && root.searchMiss.hint
+                                    spacing: 10
+                                    SButton {
+                                        text: root.searchMiss && root.searchMiss.hint
+                                              ? "Try \"" + root.searchMiss.hint + "\" hint"
+                                              : "Try with a region"
+                                        tip: "Runs the search again with the region named explicitly."
+                                        onClicked: {
+                                            if (root.searchMiss && root.searchMiss.hint)
+                                                root.retryWithHint(root.searchMiss.hint)
+                                        }
+                                    }
+                                    SButton {
+                                        visible: root.searchMiss && root.searchMiss.hint
+                                        text: "Fetch region"
+                                        tip: "Opens the Consumer tab with this region picked — fetching is your call, nothing downloads until you confirm there."
+                                        onClicked: {
+                                            if (root.searchMiss && root.searchMiss.hint)
+                                                root.goToRestore(root.searchMiss.hint)
+                                        }
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                Text {
+                                    text: {
+                                        if (!root.searchMiss) return ""
+                                        const m = root.searchMiss
+                                        if (m.indexed_regions && m.indexed_regions.length > 0)
+                                            return "Local indexes: " + m.indexed_regions.join(", ")
+                                        return ""
+                                    }
+                                    visible: text.length > 0
+                                    font.family: root.fMono
+                                    font.pixelSize: 11
+                                    color: root.cFaint
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+
+                        // Results list.
+                        ListView {
+                            visible: root.searchResults.length > 0
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(
+                                contentItem.childrenRect.height,
+                                46 * root.searchResults.length + 8)
+                            clip: true
+                            spacing: 2
+                            interactive: false
+                            model: ListModel { id: searchModel }
+                            delegate: Item {
+                                width: searchFlick.width - 48
+                                height: 46
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 6
+                                    color: root.searchSelected && root.searchSelected.name === model.name && root.searchSelected.lat.toFixed(4) === model.coords.split(", ")[0]
+                                          ? Qt.rgba(0.886, 0.878, 0.788, 0.10)
+                                          : (resultMouse.containsMouse ? Qt.rgba(0.886, 0.878, 0.788, 0.05) : "transparent")
+                                    border.width: 1
+                                    border.color: Qt.rgba(0.961, 0.961, 0.941, 0.10)
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    spacing: 1
+                                    RowLayout {
+                                        spacing: 8
+                                        Text {
+                                            text: model.name
+                                            font.family: root.fSans
+                                            font.pixelSize: 14
+                                            font.weight: Font.DemiBold
+                                            color: root.cInk
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                        Text {
+                                            text: model.region
+                                            font.family: root.fMono
+                                            font.pixelSize: 10
+                                            color: root.cFaint
+                                        }
+                                    }
+                                    Text {
+                                        text: model.kind + "  ·  " + model.coords +
+                                              (model.admin.length > 0 ? "  ·  " + model.admin : "")
+                                        font.family: root.fMono
+                                        font.pixelSize: 11
+                                        color: root.cMuted
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                MouseArea {
+                                    id: resultMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.selectSearchResult(root.searchResults[index])
+                                }
+                            }
+                        }
+                    }
+
+                    // -- Selected place + locator snapshot --
+                    Section {
+                        id: secDetail
+                        numeral: "02"
+                        heading: "Selected place"
+                        visible: root.searchSelected !== null
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 16
+                            // The locator snapshot: nearby indexed places
+                            // and the admin ring, rendered by the module.
+                            Image {
+                                id: locatorImage
+                                source: root.searchSnapshot
+                                fillMode: Image.PreserveAspectFit
+                                Layout.preferredWidth: 320
+                                Layout.preferredHeight: 240
+                                Rectangle {
+                                    anchors.fill: parent
+                                    visible: locatorImage.status !== Image.Ready
+                                    radius: 8
+                                    color: root.cConsole
+                                    border.width: 1
+                                    border.color: root.cHair
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: locatorImage.status === Image.Loading
+                                              ? "rendering…"
+                                              : "snapshot"
+                                        font.family: root.fSans
+                                        font.pixelSize: 12
+                                        color: root.cFaint
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Text {
+                                    text: root.searchSelected ? root.searchSelected.name : ""
+                                    font.family: root.fSerif
+                                    font.pixelSize: 22
+                                    color: root.cInk
+                                    wrapMode: Text.Wrap
+                                }
+                                Text {
+                                    text: root.searchSelected
+                                          ? (root.searchSelected.class + " / " +
+                                             root.searchSelected.subclass)
+                                          : ""
+                                    font.family: root.fMono
+                                    font.pixelSize: 12
+                                    color: root.cMuted
+                                }
+                                Text {
+                                    text: root.searchSelected
+                                          ? (root.fmtCoord(root.searchSelected.lat) + ", " +
+                                             root.fmtCoord(root.searchSelected.lon))
+                                          : ""
+                                    font.family: root.fMono
+                                    font.pixelSize: 12
+                                    color: root.cTan
+                                }
+                                Text {
+                                    visible: root.searchSelected &&
+                                             (root.searchSelected.admin_path || []).length > 0
+                                    text: root.searchSelected
+                                          ? (root.searchSelected.admin_path || []).join(" / ")
+                                          : ""
+                                    font.family: root.fSans
+                                    font.pixelSize: 12
+                                    color: root.cMuted
+                                    wrapMode: Text.Wrap
+                                }
+                                Text {
+                                    text: root.searchSelected ? root.searchSelected.region : ""
+                                    font.family: root.fMono
+                                    font.pixelSize: 11
+                                    color: root.cFaint
+                                }
+                            }
+                        }
+                    }
+
+                    // -- Reverse lookup --
+                    Section {
+                        id: secReverse
+                        numeral: "03"
+                        heading: "Coordinates to place"
+
+                        Hint {
+                            text: "Give a point, get the place. The point routes to its region locally, then the nearest indexed place is found with its administrative path."
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            TextField {
+                                id: reverseLat
+                                Layout.preferredWidth: 140
+                                placeholderText: "latitude, e.g. 6.455"
+                                font.family: root.fMono
+                                font.pixelSize: 13
+                                color: root.cInk
+                                placeholderTextColor: root.cFaint
+                                background: Rectangle {
+                                    radius: 6
+                                    color: Qt.rgba(0.961, 0.961, 0.941, 0.06)
+                                    border.width: 1
+                                    border.color: reverseLat.activeFocus ? root.cTeal : root.cHair
+                                }
+                            }
+                            TextField {
+                                id: reverseLon
+                                Layout.preferredWidth: 140
+                                placeholderText: "longitude, e.g. 3.407"
+                                font.family: root.fMono
+                                font.pixelSize: 13
+                                color: root.cInk
+                                placeholderTextColor: root.cFaint
+                                background: Rectangle {
+                                    radius: 6
+                                    color: Qt.rgba(0.961, 0.961, 0.941, 0.06)
+                                    border.width: 1
+                                    border.color: reverseLon.activeFocus ? root.cTeal : root.cHair
+                                }
+                            }
+                            PButton {
+                                text: root.reverseBusy ? "Looking…" : "Locate"
+                                enabled: !root.reverseBusy
+                                opacity: enabled ? 1.0 : 0.4
+                                tip: "Finds the nearest indexed place to the point. Works offline, from the local region indexes."
+                                onClicked: root.runReverse()
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Rectangle {
+                            visible: root.reverseResult !== null
+                            Layout.fillWidth: true
+                            implicitHeight: revCol.implicitHeight + 24
+                            radius: 8
+                            color: root.cPanel
+                            border.width: 1
+                            border.color: root.cHair
+                            ColumnLayout {
+                                id: revCol
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 6
+                                Text {
+                                    text: {
+                                        if (!root.reverseResult) return ""
+                                        if (root.reverseResult.error) return root.reverseResult.error
+                                        return root.reverseResult.name
+                                    }
+                                    font.family: root.fSans
+                                    font.pixelSize: 16
+                                    font.weight: Font.DemiBold
+                                    color: root.reverseResult && root.reverseResult.error ? root.cBrown : root.cInk
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                                Text {
+                                    visible: root.reverseResult && !root.reverseResult.error
+                                    text: root.reverseResult
+                                          ? (root.reverseResult.class + " / " +
+                                             root.reverseResult.subclass + "  ·  " +
+                                             Math.round(root.reverseResult.distance_m) + " m away")
+                                          : ""
+                                    font.family: root.fMono
+                                    font.pixelSize: 11
+                                    color: root.cMuted
+                                }
+                                Text {
+                                    visible: root.reverseResult && !root.reverseResult.error &&
+                                             (root.reverseResult.admin_path || []).length > 0
+                                    text: root.reverseResult
+                                          ? (root.reverseResult.admin_path || []).join(" / ")
+                                          : ""
+                                    font.family: root.fSans
+                                    font.pixelSize: 12
+                                    color: root.cMuted
+                                    wrapMode: Text.Wrap
+                                }
+                            }
+                        }
+                    }
+
+                    // -- Local indexes --
+                    Section {
+                        id: secIndexes
+                        numeral: "04"
+                        heading: "Local indexes"
+
+                        Hint {
+                            text: "Each imported region can have a search index (one SQLite file, built locally, no network). Indexes build automatically after a restore or import; you can also build or rebuild them here."
+                        }
+
+                        RowLayout {
+                            spacing: 12
+                            SButton {
+                                text: "Refresh"
+                                tip: "Re-checks which regions have indexes and whether they are stale (region re-imported since the index was built)."
+                                onClicked: root.call("search_index_status", {})
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        ListView {
+                            visible: root.indexStatuses.length > 0
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(
+                                contentItem.childrenRect.height,
+                                52 * root.indexStatuses.length + 8)
+                            clip: true
+                            spacing: 4
+                            interactive: false
+                            model: ListModel { id: indexModel }
+                            delegate: Item {
+                                width: searchFlick.width - 48
+                                height: 52
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 6
+                                    color: root.cPanel
+                                    border.width: 1
+                                    border.color: Qt.rgba(0.961, 0.961, 0.941, 0.10)
+                                }
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    spacing: 12
+                                    ColumnLayout {
+                                        spacing: 1
+                                        Layout.fillWidth: true
+                                        Text {
+                                            text: model.region
+                                            font.family: root.fSans
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                            color: root.cInk
+                                        }
+                                        Text {
+                                            text: model.status + "  ·  " + model.detail
+                                            font.family: root.fMono
+                                            font.pixelSize: 11
+                                            color: model.status === "indexed" ? root.cMuted
+                                                 : (model.status === "stale" ? root.cWarn : root.cFaint)
+                                        }
+                                    }
+                                    SButton {
+                                        text: model.status === "not built" ? "Build index" : "Rebuild"
+                                        tip: "Builds the region's search index from its imported PBF. Runs as a background job — a full country takes a few minutes."
+                                        onClicked: root.buildIndex(model.region)
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            visible: root.indexStatuses.length === 0
+                            Layout.fillWidth: true
+                            text: "No regions imported yet. Restore or import a region (Consumer tab) and its index builds automatically."
+                            font.family: root.fSans
+                            font.pixelSize: 12
+                            color: root.cFaint
+                            wrapMode: Text.Wrap
+                        }
+                    }
+
+                    OutputBox {
+                        id: out3
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 200
+                        Layout.bottomMargin: 8
+                    }
+                }
+            }
+
             // ============ GUIDE ============
             // The bundled documentation: a doc list on the left, the rendered
             // page on the right. The markdown ships as string constants in
@@ -3087,7 +3843,7 @@ Item {
             // file reads were not an option (see STATE.md).
             Item {
                 anchors.fill: parent
-                visible: root.currentTab === 3
+                visible: root.currentTab === 43
 
                 RowLayout {
                     anchors.fill: parent

@@ -100,10 +100,48 @@ pub async fn fund_account_from_genesis(
         return Ok(());
     }
 
-    let source = testnet_initial_state::initial_pub_accounts_private_keys()
-        .into_iter()
-        .next()
-        .context("the genesis state declares no funded account")?;
+    // Pick a genesis source that can cover the transfer. Account A (the
+    // historical default from `.next()`) drains over time — the testnet's A
+    // sat at ~0.9T while B still held ~19.8T, so a 1T transfer from A was
+    // accepted by the sequencer but never landed (insufficient funds at
+    // inclusion). Try each account in order; if none covers the full amount,
+    // take the richest and halve it (leave some for other testnet users)
+    // rather than failing silently.
+    let genesis = testnet_initial_state::initial_pub_accounts_private_keys();
+    let mut chosen = None;
+    let mut best_idx = 0;
+    let mut best_bal = 0u128;
+    for (i, acc) in genesis.iter().enumerate() {
+        let bal = net_retry!(
+            wallet.get_account_public(acc.account_id),
+            "fund-src-balance"
+        )
+        .data
+        .native_balance()
+        .unwrap_or(0);
+        if bal >= amount {
+            chosen = Some(i);
+            break;
+        }
+        if bal > best_bal {
+            best_bal = bal;
+            best_idx = i;
+        }
+    }
+    let (source_idx, amount) = match chosen {
+        Some(i) => (i, amount),
+        None => {
+            if best_bal == 0 {
+                anyhow::bail!("all genesis accounts are empty — cannot fund {target}");
+            }
+            let adapted = best_bal / 2;
+            eprintln!(
+                "no genesis account covers {amount}; funding {adapted} from the richest (holds {best_bal})"
+            );
+            (best_idx, adapted)
+        }
+    };
+    let source = &genesis[source_idx];
     let nonce = net_retry!(
         wallet.get_accounts_nonces(&[source.account_id]),
         "fund-nonce"

@@ -1,7 +1,7 @@
 # logos-osm — build state (LP-0018 / PR #71: OpenStreetMap integration)
 
 > Working doc for whoever picks this up (agent or human). Update per milestone.
-> **Last updated: 2026-11-14** — v1.5.0: account fields accept hex OR base58; dismissible post-fetch card; UI version display fixed (workspace Cargo.toml + app plugin version bumped in sync with metadata).
+> **Last updated: 2026-11-16** — v1.5.0 released (14 Nov). Two more TODO items committed to main (NOT yet released): adaptive genesis funding (fund_account_from_genesis tries both genesis accounts, falls back to the richest at half its balance — fixes the depleted-account-A silent-fail) + Regions tab search/sort (free-text search + sort by name/size/registered). Pending next release.
 > The section below is current; everything after the historical marker
 > describes the pre-port state and is kept for context only, including rules
 > that no longer apply.
