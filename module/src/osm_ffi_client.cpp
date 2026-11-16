@@ -21,6 +21,8 @@ namespace {
 // path) is the reliable cross-platform path.
 #ifdef _WIN32
 const char* kLib    = "logos_osm.dll";
+#elif defined(__APPLE__)
+const char* kLib    = "liblogos_osm.dylib";
 #else
 const char* kLib    = "liblogos_osm.so";
 #endif

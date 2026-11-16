@@ -9,7 +9,9 @@
   "dependencies": [],
   "capabilities": [],
   "include": [
-    "liblogos_osm.so"
+    "liblogos_osm.so",
+    "liblogos_osm.dylib",
+    "logos_osm.dll"
   ],
   "nix": {
     "packages": {
