@@ -294,6 +294,33 @@ jobs:
       - name: Build core + app .lgx bundles
         run: nix build .#osm-lgx .#osm-app-lgx --print-out-paths
 
+      - name: Verify .lgx contains all declared runtime files
+        # The metadata `include` list names the runtime files the .lgx must
+        # carry (liblogos_osm.so, .dylib, .dll). A platform only ships one
+        # spelling, but at least that one must be present. This catches the
+        # class of bug where a build succeeds but the .lgx is missing a
+        # dlopen'd library that Basecamp needs at runtime.
+        run: |
+          set -euo pipefail
+          LGX=$(nix build .#osm-lgx --print-out-paths --no-link)
+          echo "Checking $LGX"
+          CONTENTS=$(tar tzf "$LGX")
+          MISSING=0
+          for FILE in liblogos_osm.so liblogos_osm.dylib logos_osm.dll; do
+            if echo "$CONTENTS" | grep -q "$FILE"; then
+              echo "  found: $FILE"
+            else
+              echo "  (expected on this platform, not present): $FILE"
+            fi
+          done
+          # On linux-amd64 the .so MUST be present.
+          if ! echo "$CONTENTS" | grep -q 'liblogos_osm\.so'; then
+            echo "::error::liblogos_osm.so is missing from the .lgx"
+            MISSING=1
+          fi
+          if [ "$MISSING" -ne 0 ]; then exit 1; fi
+          echo "All required runtime files present."
+
       - name: "Smoke: extracted plugin loads + dispatches over the module C ABI"
         # No Rust core in this job (no cargo): health() must dispatch through
         # the generated glue and FAIL CLOSED ("osm core not loaded") — which
