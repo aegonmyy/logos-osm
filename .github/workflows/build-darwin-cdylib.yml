@@ -1,0 +1,36 @@
+name: Build macOS cdylib
+
+# Builds liblogos_osm.dylib on a macOS runner and uploads it as an artifact.
+# Download the artifact, copy it to module/vendor/aarch64-darwin/, commit,
+# and dispatch the release workflow so the .lgx bundles it.
+#
+# This mirrors scripts/build-windows-cdylib.sh + the committed DLL in
+# module/vendor/x86_64-windows/.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cdylib
+        env:
+          RISC0_DEV_MODE: "1"
+        run: |
+          cargo build --release -p logos-osm
+
+      - name: Verify output
+        run: |
+          find target/release -name 'liblogos_osm.*' -type f
+          file target/release/liblogos_osm.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-cdylib
+          path: target/release/liblogos_osm.dylib
