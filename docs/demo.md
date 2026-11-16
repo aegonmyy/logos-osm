@@ -195,17 +195,12 @@ that anyone can verify."
 
 ## Basecamp walkthrough
 
-The same cycle works from the Basecamp app, no terminal needed. Screenshots
-will go here showing each step.
+The same cycle works from the Basecamp app, no terminal needed. Install
+the `osm` and `osm_app` modules from the catalog, and the app walks you
+through hosting, fetching, and browsing the on-chain registry.
 
-<!-- TODO: screenshot — installing the osm and osm_app modules from the catalog -->
+Watch the demo: https://youtu.be/mW0M1lPDjpo
 
-<!-- TODO: screenshot — the Regions tab showing the 72-region set with on-chain status -->
-
-<!-- TODO: screenshot — the Host/Registrar tab hosting a region (download, verify, store) -->
-
-<!-- TODO: screenshot — the registration transaction and on-chain confirmation -->
-
-<!-- TODO: screenshot — the Consumer tab fetching a region by CID and verifying the MD5 -->
-
-<!-- TODO: screenshot — the on-chain lookup showing mirrors and registrars -->
+One caveat: signing the registration transaction currently only works
+from the CLI (`osm register --sign`). The Basecamp app builds the
+transaction for you, but the signing step goes through the CLI for now.
