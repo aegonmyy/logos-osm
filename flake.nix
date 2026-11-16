@@ -67,7 +67,11 @@
           pname = "logos-osm-cdylib";
           version = "1.5.0";
           src = ./.;
-          sourceRoot = "source/osm-sdk";
+          # The repo root IS the workspace root. The osm-sdk crate lives
+          # in the osm-sdk/ subdirectory, but buildRustPackage needs to
+          # run from the workspace root so Cargo.lock and workspace deps
+          # resolve. sourceRoot is the top-level dir name nix assigns
+          # when unpacking a path source (the basename of the path).
           cargoLock = {
             lockFile = ./Cargo.lock;
             allowBuiltinFetchGit = true;
