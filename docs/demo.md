@@ -195,9 +195,50 @@ that anyone can verify."
 
 ## Basecamp walkthrough
 
-The same cycle works from the Basecamp app, no terminal needed. Install
-the `osm` and `osm_app` modules from the catalog, and the app walks you
-through hosting, fetching, and browsing the on-chain registry.
+The same cycle works from the Basecamp app, no terminal needed. If you
+prefer a GUI over the CLI, here is how to get it running.
+
+### Install Logos Basecamp
+
+Download Basecamp from the
+[Logos website](https://logos.co) or the
+[GitHub releases](https://github.com/logos-co/logos-basecamp/releases).
+It is available for macOS (Apple Silicon), Linux, and Windows.
+
+### Add the OSM catalog
+
+Open Basecamp, go to Settings, then Package Repositories, and add:
+
+```
+https://raw.githubusercontent.com/aegonmyy/logos-modules-release-base/main/logos-repo.json
+```
+
+### Install the modules
+
+Go to the Applications tab. Find the OSM modules and install them:
+
+1. Install `osm` (the SDK core module). This provides the region set,
+   hosting, fetching, and on-chain lookup.
+2. Install `osm_app` (the distribution app). This is the GUI with three
+   tabs: Host/Registrar, Regions, and Consumer.
+
+### Point the app at your storage node and the testnet
+
+In the app, set:
+
+```
+Storage URL:  your local Codex node (e.g. http://127.0.0.1:8080)
+Sequencer:    https://testnet.lez.logos.co
+Program:      D3f2BijChudS9Y1BKa4XVfVbZjmkzgGzdZjQGkDz1BVt
+```
+
+### Use it
+
+The app has three tabs. Host/Registrar lets you download a region from
+Geofabrik, store it in Logos Storage, and build the registration
+transaction. Regions shows the 72-region set with each region's on-chain
+status. Consumer lets you fetch a region by its on-chain CID and verify
+the MD5.
 
 Watch the demo: https://youtu.be/mW0M1lPDjpo
 
