@@ -611,8 +611,14 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
         "fetch" => op_fetch(args),
         "import" => op_import(args),
         "update" => op_update(args),
+        "probe_storage" => op_probe_storage(args),
         "lookup" => op_lookup(args),
         "lookup_bulk" => op_lookup_bulk(args),
+        "search_build" => op_search_build(args),
+        "geocode" => op_geocode(args),
+        "reverse_geocode" => op_reverse_geocode(args),
+        "search_index_status" => op_search_index_status(args),
+        "search_snapshot" => op_search_snapshot(args),
         "catalog" => with_state(args, |st| {
             Ok(client(st)
                 .catalog()
@@ -1103,6 +1109,10 @@ fn op_fetch(args: &Value) -> *mut c_char {
                 "a long job is already running ({existing}); wait for it to finish, or clear tasks to stop it and start a new one"
             ));
         }
+        // Auto-index after import (default on; `index: false` opts out): the
+        // fetched PBF is on disk and in the catalog, so the search index
+        // builds as its own background job and geocode starts answering.
+        let index_after = args.get("index").and_then(Value::as_bool).unwrap_or(true);
         let (jr, jc, jm) = (region.clone(), cid.clone(), checksum);
         let job_st = st.clone();
         let progress = crate::progress::JobProgress::new();
@@ -1115,12 +1125,35 @@ fn op_fetch(args: &Value) -> *mut c_char {
             let summary = rt()
                 .block_on(c.import_local(&jr, &outcome.path))
                 .map_err(|e| format!("import {jr}: {e:#}"))?;
+            let index_job = if index_after {
+                let db = crate::search::index_path(std::path::Path::new(&job_st.cache_dir), &jr)
+                    .display()
+                    .to_string();
+                let (ir, ip, idb) = (jr.clone(), outcome.path.display().to_string(), db);
+                Some(spawn_job(
+                    "search_build",
+                    format!("search_build {ir}"),
+                    None,
+                    move || {
+                        let stats = crate::search::build_index(
+                            &ir,
+                            std::path::Path::new(&ip),
+                            std::path::Path::new(&idb),
+                        )
+                        .map_err(|e| format!("search_build {ir}: {e:#}"))?;
+                        serde_json::to_value(stats).map_err(|e| e.to_string())
+                    },
+                ))
+            } else {
+                None
+            };
             Ok(json!({
                 "region": summary.region,
                 "bytes": summary.bytes,
                 "blobs": summary.blobs,
                 "md5_verified": hex::encode(summary.md5),
                 "path": outcome.path.display().to_string(),
+                "index_job": index_job,
             }))
         });
         return ok(json!({ "job_id": id, "op": "fetch", "region": region }));
@@ -1195,10 +1228,40 @@ fn op_import(args: &Value) -> *mut c_char {
         }))
     } else {
         match block_on(c.import_local(&region, path)) {
-            Ok(s) => ok(json!({
-                "region": s.region, "bytes": s.bytes, "blobs": s.blobs,
-                "md5": hex::encode(s.md5),
-            })),
+            Ok(s) => {
+                // Auto-index (default on; `index: false` opts out): the
+                // import put the PBF in the catalog, so the search index
+                // builds in the background as its own job.
+                let index_after = args.get("index").and_then(Value::as_bool).unwrap_or(true);
+                let index_job = if index_after {
+                    let db =
+                        crate::search::index_path(std::path::Path::new(&st.cache_dir), &region)
+                            .display()
+                            .to_string();
+                    let (ir, ip, idb) = (region.clone(), pbf.clone(), db);
+                    Some(spawn_job(
+                        "search_build",
+                        format!("search_build {ir}"),
+                        None,
+                        move || {
+                            let stats = crate::search::build_index(
+                                &ir,
+                                std::path::Path::new(&ip),
+                                std::path::Path::new(&idb),
+                            )
+                            .map_err(|e| format!("search_build {ir}: {e:#}"))?;
+                            serde_json::to_value(stats).map_err(|e| e.to_string())
+                        },
+                    ))
+                } else {
+                    None
+                };
+                ok(json!({
+                    "region": s.region, "bytes": s.bytes, "blobs": s.blobs,
+                    "md5": hex::encode(s.md5),
+                    "index_job": index_job,
+                }))
+            }
             Err(e) => err(format!("import: {e:#}")),
         }
     }
@@ -1388,9 +1451,259 @@ fn op_update(args: &Value) -> *mut c_char {
     }
 }
 
+/// Connect-time health probe: store a tiny blob + fetch it back through the
+/// configured storage node, returning reachable + round-trip latency. Lets
+/// the Connect tab surface "no Logos Storage node is running at the
+/// configured URL" BEFORE a multi-GB host op starts, not minutes into it.
+fn op_probe_storage(args: &Value) -> *mut c_char {
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let storage = if st.memory {
+        AnyStorage::Memory(MemoryStorage::new())
+    } else {
+        AnyStorage::Codex(CodexStorage::new(&st.storage_url))
+    };
+    let probe = bytes::Bytes::from_static(b"osm-probe-reachability");
+    let start = std::time::Instant::now();
+    let stored = match block_on(storage.put_bytes(probe.clone())) {
+        Ok(o) => o,
+        Err(e) => {
+            return ok(json!({
+                "ok": false,
+                "latency_ms": start.elapsed().as_millis(),
+                "error": format!("{e:#}")
+            }))
+        }
+    };
+    let fetched = match block_on(storage.get_bytes(&stored.cid)) {
+        Ok(b) => b,
+        Err(e) => {
+            return ok(json!({
+                "ok": false,
+                "latency_ms": start.elapsed().as_millis(),
+                "error": format!("stored but fetch failed: {e:#}")
+            }))
+        }
+    };
+    let roundtrip = fetched.as_ref() == probe.as_ref();
+    ok(json!({
+        "ok": roundtrip,
+        "latency_ms": start.elapsed().as_millis(),
+        "cid": stored.cid,
+        "bytes": fetched.len()
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Search ops
+//
+// The geocode path never touches the network: it queries the local
+// per-region SQLite indexes under <cache_dir>/search/. Building an index
+// (search_build) reads the region PBF already on disk and runs as a job
+// (minutes for a full country). Nothing here fetches anything — that is
+// the app's explicit user decision, made through the existing fetch ops.
+// ---------------------------------------------------------------------------
+
+/// The pbf path for a region from the local catalog (its imported file).
+fn catalog_pbf(st: &AppState, region: &str) -> Option<String> {
+    client(st)
+        .catalog()
+        .into_iter()
+        .find(|c| c.region == region)
+        .map(|c| c.path.display().to_string())
+}
+
+/// A running search_build for the same region would duplicate work and
+/// race the atomic rename at the end; refuse it (host/fetch stay free to
+/// run — an index build is CPU work, not a network stream).
+fn running_search_build(region: &str) -> bool {
+    JOBS.lock()
+        .unwrap()
+        .iter()
+        .any(|j| j.state == "running" && j.op == "search_build" && j.label.contains(region))
+}
+
+fn op_search_build(args: &Value) -> *mut c_char {
+    let Some(region) = str_arg(args, "region") else {
+        return err("search_build requires region");
+    };
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    // Explicit pbf wins (index a file the caller names); else the
+    // cataloged import for the region.
+    let pbf = match str_arg(args, "pbf") {
+        Some(p) => p,
+        None => match catalog_pbf(&st, &region) {
+            Some(p) => p,
+            None => {
+                return err(format!(
+                    "region {region} has no imported PBF in the catalog — import or fetch it first, or pass an explicit pbf path"
+                ))
+            }
+        },
+    };
+    if !std::path::Path::new(&pbf).exists() {
+        return err(format!("pbf file not found: {pbf}"));
+    }
+    if running_search_build(&region) {
+        return err(format!("an index build for {region} is already running"));
+    }
+    let db = crate::search::index_path(std::path::Path::new(&st.cache_dir), &region)
+        .display()
+        .to_string();
+    let label = format!("search_build {region}");
+    if args.get("job").and_then(Value::as_bool).unwrap_or(false) {
+        let (jr, jp, jd) = (region.clone(), pbf.clone(), db.clone());
+        let id = spawn_job("search_build", label, None, move || {
+            let stats = crate::search::build_index(
+                &jr,
+                std::path::Path::new(&jp),
+                std::path::Path::new(&jd),
+            )
+            .map_err(|e| format!("search_build {jr}: {e:#}"))?;
+            serde_json::to_value(stats).map_err(|e| e.to_string())
+        });
+        return ok(json!({ "job_id": id, "op": "search_build", "region": region }));
+    }
+    match crate::search::build_index(
+        &region,
+        std::path::Path::new(&pbf),
+        std::path::Path::new(&db),
+    ) {
+        Ok(stats) => ok(serde_json::to_value(stats).unwrap_or(Value::Null)),
+        Err(e) => err(format!("search_build {region}: {e:#}")),
+    }
+}
+
+fn op_geocode(args: &Value) -> *mut c_char {
+    let Some(query) = str_arg(args, "query") else {
+        return err("geocode requires query");
+    };
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let regions: Option<Vec<String>> = str_arg(args, "regions").map(|r| {
+        r.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
+    let cache = std::path::Path::new(&st.cache_dir);
+    match crate::search::geocode_all(cache, &query, regions.as_deref(), limit) {
+        Ok(outcome) => ok(serde_json::to_value(outcome).unwrap_or(Value::Null)),
+        Err(e) => err(format!("geocode: {e:#}")),
+    }
+}
+
+fn op_reverse_geocode(args: &Value) -> *mut c_char {
+    let lat = args.get("lat").and_then(Value::as_f64);
+    let lon = args.get("lon").and_then(Value::as_f64);
+    let (Some(lat), Some(lon)) = (lat, lon) else {
+        return err("reverse_geocode requires lat and lon");
+    };
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let cache = std::path::Path::new(&st.cache_dir);
+    match crate::search::reverse_all(cache, lat, lon) {
+        Ok(hit) => ok(serde_json::to_value(hit).unwrap_or(Value::Null)),
+        Err(e) => err(format!("reverse_geocode: {e:#}")),
+    }
+}
+
+fn op_search_index_status(args: &Value) -> *mut c_char {
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let catalog: Vec<(String, [u8; 16])> = client(&st)
+        .catalog()
+        .into_iter()
+        .map(|c| (c.region, c.md5))
+        .collect();
+    let cache = std::path::Path::new(&st.cache_dir);
+    let all = crate::search::status_all(cache, &catalog);
+    // One region filter, else everything.
+    let region = str_arg(args, "region");
+    let out: Vec<_> = match region {
+        Some(r) => all.into_iter().filter(|s| s.region == r).collect(),
+        None => all,
+    };
+    ok(json!({ "indexes": out, "count": out.len() }))
+}
+
+/// A locator snapshot PNG for a search result, base64 in the reply so the
+/// QML Image can consume it as a data URL without any file the sandbox's
+/// URL interceptor would block.
+fn op_search_snapshot(args: &Value) -> *mut c_char {
+    let Some(region) = str_arg(args, "region") else {
+        return err("search_snapshot requires region");
+    };
+    let lat = args.get("lat").and_then(Value::as_f64);
+    let lon = args.get("lon").and_then(Value::as_f64);
+    let (Some(lat), Some(lon)) = (lat, lon) else {
+        return err("search_snapshot requires lat and lon");
+    };
+    let label = str_arg(args, "label").unwrap_or_default();
+    let sub_label = str_arg(args, "admin_path")
+        .map(|p| {
+            p.split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    let db = crate::search::index_path(std::path::Path::new(&st.cache_dir), &region);
+    let conn = match crate::search::open_index(&db) {
+        Ok(c) => c,
+        Err(e) => return err(format!("{e:#}")),
+    };
+    match crate::search::render_locator_png(&conn, lat, lon, &label, &sub_label) {
+        Ok(png) => ok(json!({
+            "png_base64": base64_encode(&png),
+            "width": 640,
+            "height": 480,
+            "region": region,
+        })),
+        Err(e) => err(format!("search_snapshot: {e:#}")),
+    }
+}
+
+/// Minimal standard base64 (no dependency): the PNG is a few tens of KB,
+/// so a compact table-driven encoder is fine.
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(triple >> 18) as usize & 0x3f] as char);
+        out.push(TABLE[(triple >> 12) as usize & 0x3f] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(triple >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[triple as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
 
 fn str_arg(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(|v| v.as_str()).map(String::from)

@@ -178,8 +178,16 @@ enum Cmd {
         #[arg(long)]
         registrar: Option<String>,
     },
-    /// Check whether a newer snapshot is published for a region.
-    Update { region: String },
+    /// Check whether a newer snapshot is published for a region. With
+    /// `--apply`, also re-host the newer snapshot when one is available
+    /// (download -> verify MD5 -> store -> new CID) and print the
+    /// registration command for it.
+    Update {
+        region: String,
+        /// Re-host the newer snapshot when one is available.
+        #[arg(long)]
+        apply: bool,
+    },
     /// List the local catalog.
     Catalog,
     /// Read registry entries from the chain: one region, every subregion of a
@@ -702,7 +710,7 @@ async fn main() -> Result<()> {
                 Ok(())
             })?;
         }
-        Cmd::Update { region } => {
+        Cmd::Update { region, apply } => {
             with_client!(|client: OsmClient<_>| async move {
                 match client.update_check(&region).await? {
                     UpdateStatus::UpToDate { local, published } => {
@@ -712,6 +720,18 @@ async fn main() -> Result<()> {
                         println!(
                             "{region}: update available (local {local} -> published {published})"
                         );
+                        if apply {
+                            let snap = client.host_region(&region).await?;
+                            client.catalog_record_hosted(&snap)?;
+                            println!(
+                                "re-hosted: {} bytes, version {}, md5 {}",
+                                snap.bytes,
+                                snap.version,
+                                hex::encode(snap.checksum)
+                            );
+                            println!("new storage cid: {}", snap.cid);
+                            println!("register with: osm register {} --registrar <hex>", region);
+                        }
                     }
                     UpdateStatus::NotImported { published } => {
                         println!("{region}: not imported locally (published {published})");

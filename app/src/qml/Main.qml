@@ -536,6 +536,15 @@ Item {
                          + (pub || "?")
                 return region + " · checked"
             }
+            case "probe_storage": {
+                const ms = res.latency_ms !== undefined ? res.latency_ms + " ms" : ""
+                if (res.ok)
+                    return "storage reachable ✓" + (ms ? " · " + ms : "")
+                                  + (res.bytes ? " · " + res.bytes + " B roundtrip" : "")
+                return "storage unreachable ✗"
+                     + (ms ? " · " + ms : "")
+                     + (res.error ? " · " + String(res.error) : "")
+            }
             case "lookup_bulk": {
                 const reg = res.registered_count !== undefined ? res.registered_count : "?"
                 const total = res.count !== undefined ? res.count : "?"
@@ -1080,7 +1089,7 @@ Item {
         // outcome is already shown as a human status line in the task row,
         // so dumping the raw JSON would just repeat it less readably.
         // Failed ops always dump, so the error is visible in full.
-        const tailored = (op === "fetch" || op === "import" || op === "update")
+        const tailored = (op === "fetch" || op === "import" || op === "update" || op === "probe_storage")
         if (op !== "job_status" && !(r.ok && tailored)) {
             if (root.currentTab === 0)      out.outputText  = consoleText
             else if (root.currentTab === 1) outR.outputText = consoleText
@@ -2450,6 +2459,25 @@ Item {
                                          ? "Your local Logos Storage node - leave as-is unless you're pointing at a remote one."
                                          : ""
                                 PersistField { id: storageUrl; text: "http://127.0.0.1:8080" }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    SButton {
+                                        text: "probe"
+                                        tip: "Store + fetch a tiny blob through this storage node now - reports reachable/unreachable + latency so you know before a multi-GB fetch whether the node is up."
+                                        onClicked: root.call("probe_storage", {})
+                                    }
+                                    SButton {
+                                        text: "localhost"
+                                        tip: "Point at the standard local Codex node."
+                                        onClicked: { storageUrl.text = "http://127.0.0.1:8080"; storageUrl.showSaved() }
+                                    }
+                                    SButton {
+                                        text: "custom..."
+                                        tip: "Clear the field to paste a remote node URL."
+                                        onClicked: { storageUrl.text = ""; storageUrl.showSaved() }
+                                    }
+                                }
                             }
                             FieldCell {
                                 label: "GEOFABRIK BASE URL"
