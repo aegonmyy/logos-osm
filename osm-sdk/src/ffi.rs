@@ -38,6 +38,9 @@ use crate::registry::{
 };
 use crate::storage::{CodexStorage, MemoryStorage, Storage};
 use crate::OsmClient;
+use std::time::Duration;
+use wallet::config::{SequencerConnectionData, WalletConfigOverrides};
+use wallet::WalletCore;
 
 /// The **image id** of the `osm-registry` guest bytecode, hex (big-endian
 /// bytes of the `[u32; 8]` id). Kept in sync with `methods/osm-host`'s
@@ -612,6 +615,7 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
         "import" => op_import(args),
         "update" => op_update(args),
         "probe_storage" => op_probe_storage(args),
+        "sign_tx" => op_sign_tx(args),
         "lookup" => op_lookup(args),
         "lookup_bulk" => op_lookup_bulk(args),
         "search_build" => op_search_build(args),
@@ -1493,6 +1497,121 @@ fn op_probe_storage(args: &Value) -> *mut c_char {
         "cid": stored.cid,
         "bytes": fetched.len()
     }))
+}
+
+/// Sign + submit a registration tx in-app using the LEZ wallet at
+/// ~/.logos-osm/wallet/. Runs as a background job (wallet sync + submit +
+/// poll take minutes): returns {job_id} immediately; poll job_status for
+/// the result. The wallet must already exist (create_wallet example).
+fn op_sign_tx(args: &Value) -> *mut c_char {
+    let Some(region) = str_arg(args, "region") else {
+        return err("sign_tx requires region");
+    };
+    let Some(reg_hex) = str_arg(args, "registrar_hex") else {
+        return err("sign_tx requires registrar_hex (32-byte hex or base58)");
+    };
+    let registrar = match parse_account(&reg_hex) {
+        Ok(a) => a,
+        Err(e) => return err(format!("registrar_hex: {e}")),
+    };
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first");
+    };
+    // Build the registration tx (same path as op_register).
+    let rec = match client(&st)
+        .catalog()
+        .into_iter()
+        .find(|c| c.region == region)
+    {
+        Some(r) => r,
+        None => {
+            return err(format!(
+                "{region} is not in the local catalog (host it first)"
+            ))
+        }
+    };
+    let cid = match &rec.cid {
+        Some(c) => c.clone(),
+        None => return err(format!("catalog record for {region} has no cid")),
+    };
+    let snap = crate::HostedSnapshot {
+        region: rec.region.clone(),
+        cid,
+        checksum: rec.md5,
+        version: rec.version,
+        bytes: 0,
+        path: rec.path.clone(),
+    };
+    let program_account = match require_program_account(&st) {
+        Ok(a) => a,
+        Err(e) => return err(e.to_string()),
+    };
+    let built = build_register_region(&program_account, &registrar, &snap.registration(None));
+    let seq_url = st.sequencer_url.clone();
+    let wallet_dir = str_arg(args, "wallet_dir").map(PathBuf::from);
+    let label = format!("sign {} on-chain", region);
+    let job_id = spawn_job("sign_tx", label, None, move || {
+        let dir = wallet_dir.unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".logos-osm")
+                .join("wallet")
+        });
+        let config_path = dir.join("config.json");
+        let storage_path = dir.join("storage");
+        if !config_path.exists() {
+            return Err(format!(
+                "no wallet at {} — create one first (create_wallet example)",
+                dir.display()
+            ));
+        }
+        let overrides = WalletConfigOverrides {
+            sequencer: Some(SequencerConnectionData {
+                sequencer_addr: seq_url.parse().map_err(|e| format!("sequencer url: {e}"))?,
+                basic_auth: None,
+            }),
+            seq_tx_poll_max_blocks: Some(200),
+            seq_poll_max_retries: Some(2000),
+            seq_poll_timeout: Some(Duration::from_secs(3)),
+            ..Default::default()
+        };
+        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, Some(overrides))
+            .map_err(|e| format!("opening wallet: {e:#}"))?;
+        rt().block_on(async move {
+            wallet
+                .sync_to_latest_block()
+                .await
+                .map_err(|e| format!("wallet sync: {e:#}"))?;
+            let mentions = built.mentions(&registrar);
+            let h = wallet
+                .send_pub_tx(
+                    mentions,
+                    built.instruction.clone(),
+                    built.program_account_id,
+                )
+                .await
+                .map_err(|e| format!("send_tx: {e:?}"))?;
+            // Poll for inclusion (up to 120 s).
+            for _ in 0..60 {
+                if wallet.poll_transaction(h).await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            wallet
+                .sync_to_latest_block()
+                .await
+                .map_err(|e| format!("post-tx sync: {e:#}"))?;
+            Ok(json!({
+                "tx_hash": format!("{:?}", h),
+                "region": region,
+                "registrar_hex": hex::encode(registrar.value()),
+                "included": true
+            }))
+        })
+    });
+    ok(json!({ "job_id": job_id }))
 }
 
 // ---------------------------------------------------------------------------

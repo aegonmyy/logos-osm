@@ -188,6 +188,15 @@ enum Cmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Re-anchor stale regions: check each hosted region for a newer
+    /// Geofabrik snapshot and re-host the ones that are behind. Run
+    /// periodically to keep registry entries verifiable against current
+    /// Geofabrik MD5s. Re-registration is separate (`osm register --sign`).
+    Reanchor {
+        /// Comma-separated regions (default: all in the local catalog).
+        #[arg(long)]
+        regions: Option<String>,
+    },
     /// List the local catalog.
     Catalog,
     /// Read registry entries from the chain: one region, every subregion of a
@@ -737,6 +746,54 @@ async fn main() -> Result<()> {
                         println!("{region}: not imported locally (published {published})");
                     }
                 }
+                Ok(())
+            })?;
+        }
+        Cmd::Reanchor { regions } => {
+            with_client!(|client: OsmClient<_>| async move {
+                let cat = client.catalog();
+                let wanted: Vec<String> = match regions {
+                    Some(s) => s.split(',').map(str::trim).map(String::from).collect(),
+                    None => cat.iter().map(|c| c.region.clone()).collect(),
+                };
+                let mut stalled = 0;
+                let mut rehosted = 0;
+                let mut uptodate = 0;
+                for region in &wanted {
+                    if !cat.iter().any(|c| &c.region == region) {
+                        eprintln!("{region}: not in local catalog (host it first)");
+                        continue;
+                    }
+                    match client.update_check(region).await? {
+                        UpdateStatus::UpToDate { local, published } => {
+                            println!("{region}: up to date (local {local}, published {published})");
+                            uptodate += 1;
+                        }
+                        UpdateStatus::UpdateAvailable { local, published } => {
+                            println!(
+                                "{region}: stale (local {local} -> published {published}); re-hosting..."
+                            );
+                            stalled += 1;
+                            let snap = client.host_region(region).await?;
+                            client.catalog_record_hosted(&snap)?;
+                            println!(
+                                "{region}: re-hosted v{}, md5 {}, cid {}",
+                                snap.version,
+                                hex::encode(snap.checksum),
+                                snap.cid
+                            );
+                            println!(
+                                "  re-register with: osm register {} --sign --registrar <hex>",
+                                region
+                            );
+                            rehosted += 1;
+                        }
+                        UpdateStatus::NotImported { published } => {
+                            println!("{region}: not hosted (published {published})");
+                        }
+                    }
+                }
+                println!("re-anchor: {rehosted} re-hosted, {stalled} stale, {uptodate} up to date");
                 Ok(())
             })?;
         }

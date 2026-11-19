@@ -545,6 +545,13 @@ Item {
                      + (ms ? " · " + ms : "")
                      + (res.error ? " · " + String(res.error) : "")
             }
+            case "sign_tx": {
+                if (res.included)
+                    return (res.region || "") + " · signed + submitted ✓"
+                         + (res.tx_hash ? " · " + String(res.tx_hash).substring(0, 10) + "…" : "")
+                return (res.region || "") + " · sign failed"
+                     + (res.error ? " · " + res.error : "")
+            }
             case "lookup_bulk": {
                 const reg = res.registered_count !== undefined ? res.registered_count : "?"
                 const total = res.count !== undefined ? res.count : "?"
@@ -1089,7 +1096,7 @@ Item {
         // outcome is already shown as a human status line in the task row,
         // so dumping the raw JSON would just repeat it less readably.
         // Failed ops always dump, so the error is visible in full.
-        const tailored = (op === "fetch" || op === "import" || op === "update" || op === "probe_storage")
+        const tailored = (op === "fetch" || op === "import" || op === "update" || op === "probe_storage" || op === "sign_tx")
         if (op !== "job_status" && !(r.ok && tailored)) {
             if (root.currentTab === 0)      out.outputText  = consoleText
             else if (root.currentTab === 1) outR.outputText = consoleText
@@ -2760,6 +2767,20 @@ Item {
                                     text: "dismiss"
                                     tip: "Hide this card - the fetched regions stay on your device + storage node. Reopen it by fetching again."
                                     onClicked: root.lastRunPending = []
+                                }
+                                SButton {
+                                    text: "Sign all on-chain"
+                                    tip: "Opens your LEZ wallet (~/.logos-osm/wallet/) and signs + submits a registration tx for each fetched-but-unregistered region. The wallet must already exist (run create_wallet first)."
+                                    visible: root.lastRunPending.length > 0
+                                          && registrar.text.trim().length > 0
+                                    onClicked: {
+                                        for (let i = 0; i < root.lastRunPending.length; i++)
+                                            root.call("sign_tx", {
+                                                region: root.lastRunPending[i],
+                                                registrar_hex: registrar.text.trim(),
+                                                job: true
+                                            })
+                                    }
                                 }
                             }
                         }
