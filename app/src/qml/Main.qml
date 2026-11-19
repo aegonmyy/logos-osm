@@ -552,6 +552,15 @@ Item {
                 return (res.region || "") + " · sign failed"
                      + (res.error ? " · " + res.error : "")
             }
+            case "wallet_create":
+                return res.created ? "wallet created · account " + String(res.account_id_hex || "").substring(0, 10) + "…"
+                                   : "wallet create failed · " + (res.error || "")
+            case "wallet_import":
+                return res.imported ? "wallet imported · account " + String(res.account_id_hex || "").substring(0, 10) + "…"
+                                     : "wallet import failed · " + (res.error || "")
+            case "wallet_status":
+                return res.present ? "wallet present · account " + String(res.account_id_hex || "").substring(0, 10) + "…"
+                                    : "no wallet found"
             case "lookup_bulk": {
                 const reg = res.registered_count !== undefined ? res.registered_count : "?"
                 const total = res.count !== undefined ? res.count : "?"
@@ -1089,6 +1098,25 @@ Item {
                 root.discoverError = r.error || "discover failed"
             }
             if (r.ok) root.call("regions", {}, "regions-list")
+        } else if (op === "wallet_create" || op === "wallet_import" || op === "wallet_status") {
+            if (r.ok && r.result) {
+                wp.stage = "done"
+                wp.accountHex = r.result.account_id_hex || ""
+                wp.mnemonic = r.result.mnemonic || ""
+                if (op === "wallet_create" && r.result.created)
+                    wp.resultMsg = "Wallet created. Fund it with: cargo run -p osm-integration-tests --example fund_wallet"
+                else if (op === "wallet_import" && r.result.imported)
+                    wp.resultMsg = "Wallet imported from mnemonic."
+                else if (op === "wallet_status" && r.result.present)
+                    wp.resultMsg = "Wallet already set up."
+                else
+                    wp.resultMsg = "No wallet found. Generate or import one."
+            } else {
+                wp.stage = "done"
+                wp.accountHex = ""
+                wp.mnemonic = ""
+                wp.resultMsg = r.error || "wallet op failed"
+            }
         }
         // The 1 Hz job_status polls are bookkeeping, not results — keep
         // them out of the output consoles. Likewise the deterministic
@@ -1096,7 +1124,7 @@ Item {
         // outcome is already shown as a human status line in the task row,
         // so dumping the raw JSON would just repeat it less readably.
         // Failed ops always dump, so the error is visible in full.
-        const tailored = (op === "fetch" || op === "import" || op === "update" || op === "probe_storage" || op === "sign_tx")
+        const tailored = (op === "fetch" || op === "import" || op === "update" || op === "probe_storage" || op === "sign_tx" || op === "wallet_create" || op === "wallet_import" || op === "wallet_status")
         if (op !== "job_status" && !(r.ok && tailored)) {
             if (root.currentTab === 0)      out.outputText  = consoleText
             else if (root.currentTab === 1) outR.outputText = consoleText
@@ -1930,6 +1958,190 @@ Item {
         }
     }
 
+    // The wallet setup popup: generate a fresh LEZ wallet or import one from
+    // a recovery phrase. A wallet is what holds the account that signs region
+    // registrations on-chain — the app never holds keys directly; this creates
+    // or restores a wallet on disk at ~/.logos-osm/wallet/, surfaces the
+    // account ID + mnemonic (write it down), and (on import) the account ID.
+    component WalletPopup: Popup {
+        id: wp
+        // "intro" | "generate" | "import" | "done"
+        property string stage: "intro"
+        property string resultMsg: ""
+        property string accountHex: ""
+        property string mnemonic: ""
+        anchors.centerIn: parent
+        width: 480
+        height: 420
+        padding: 20
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: root.cSurface
+            border.color: root.cHair
+            border.width: 1
+            radius: 12
+        }
+        onOpened: { wp.stage = "intro"; wp.resultMsg = ""; wp.accountHex = ""; wp.mnemonic = "" }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: "Set up a LEZ wallet"
+                font.family: root.fSerif
+                font.pixelSize: 18
+                color: root.cInk
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: wp.stage === "intro"
+                text: "A LEZ wallet holds the account that signs your region registrations on-chain. Without one, the app can build registration transactions but can't submit them. You can either generate a fresh wallet here, or import one from a recovery phrase. The wallet is stored at ~/.logos-osm/wallet/."
+                font.family: root.fSans
+                font.pixelSize: 12
+                color: root.cMuted
+                wrapMode: Text.Wrap
+                lineHeight: 1.4
+                lineHeightMode: Text.ProportionalHeight
+            }
+            // ---- intro buttons ----
+            RowLayout {
+                Layout.fillWidth: true
+                visible: wp.stage === "intro"
+                spacing: 10
+                PButton {
+                    text: "Generate new"
+                    tip: "Creates a fresh wallet: a new keypair, a funded 'primary' account on the LEZ testnet, and a recovery mnemonic you must save."
+                    onClicked: wp.stage = "generate"
+                }
+                PButton {
+                    text: "Import from phrase"
+                    tip: "Restores a wallet from an existing 12/24-word recovery mnemonic. Wipes any wallet at the configured dir first."
+                    onClicked: wp.stage = "import"
+                }
+                Item { Layout.fillWidth: true }
+                SButton {
+                    text: "cancel"
+                    onClicked: wp.close()
+                }
+            }
+            // ---- generate ----
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: wp.stage === "generate"
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: "A new wallet + a 'primary' account will be created on the LEZ testnet. You'll get a recovery mnemonic — write it down; it's the only way to recover the keys if the wallet file is lost."
+                    font.family: root.fSans
+                    font.pixelSize: 12
+                    color: root.cMuted
+                    wrapMode: Text.Wrap
+                }
+                PButton {
+                    text: "Generate"
+                    onClicked: {
+                        wp.resultMsg = "Generating wallet..."
+                        root.call("wallet_create", {})
+                    }
+                }
+            }
+            // ---- import ----
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: wp.stage === "import"
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: "Paste your recovery mnemonic (12 or 24 words, space-separated)."
+                    font.family: root.fSans
+                    font.pixelSize: 12
+                    color: root.cMuted
+                    wrapMode: Text.Wrap
+                }
+                TextField {
+                    id: importMnemonic
+                    Layout.fillWidth: true
+                    font.family: root.fMono
+                    font.pixelSize: 11
+                    color: root.cTan
+                    placeholderText: "abandon about absent..."
+                    wrapMode: Text.WordWrap
+                    background: Rectangle { color: root.cCard; border.color: root.cHair; border.width: 1; radius: 4 }
+                }
+                PButton {
+                    text: "Import"
+                    enabled: importMnemonic.text.trim().length > 0
+                    onClicked: {
+                        wp.resultMsg = "Importing wallet..."
+                        root.call("wallet_import", { "mnemonic": importMnemonic.text.trim() })
+                    }
+                }
+            }
+            // ---- result / done ----
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: wp.stage === "done"
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: wp.resultMsg
+                    font.family: root.fSans
+                    font.pixelSize: 12
+                    color: wp.accountHex.length > 0 ? root.cGood : root.cBrown
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: wp.accountHex.length > 0
+                    text: "Account ID (paste in the REGISTRAR field):"
+                    font.family: root.fSans
+                    font.pixelSize: 11
+                    color: root.cMuted
+                }
+                TextField {
+                    Layout.fillWidth: true
+                    visible: wp.accountHex.length > 0
+                    readOnly: true
+                    selectByMouse: true
+                    font.family: root.fMono
+                    font.pixelSize: 11
+                    color: root.cTan
+                    text: wp.accountHex
+                    background: Item {}
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: wp.mnemonic.length > 0
+                    text: "Recovery mnemonic (WRITE IT DOWN — this is the only time it's shown):\n" + wp.mnemonic
+                    font.family: root.fMono
+                    font.pixelSize: 11
+                    color: root.cBrown
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    PButton {
+                        text: "Use this wallet"
+                        visible: wp.accountHex.length > 0
+                        onClicked: {
+                            registrar.text = wp.accountHex
+                            registrar.showSaved()
+                            wp.close()
+                        }
+                    }
+                    SButton {
+                        text: "close"
+                        onClicked: wp.close()
+                    }
+                }
+            }
+            Item { Layout.fillWidth: true; Layout.fillHeight: true }
+        }
+    }
+
     // Output console — mono values on a deeper green.
     component OutputBox: Rectangle {
         id: box
@@ -2528,6 +2740,11 @@ Item {
                                         if (t.length === 0) return "none"
                                         return /^[0-9a-fA-F]{64}$/.test(t) ? "valid" : "invalid"
                                     }
+                                }
+                                SButton {
+                                    text: "Setup wallet"
+                                    tip: "Generate a new LEZ wallet or import one from a recovery phrase. A wallet holds the account that signs your region registrations on-chain."
+                                    onClicked: walletPopup.open()
                                 }
                             }
                         }
@@ -4040,4 +4257,7 @@ Item {
             }
         }
     }
+
+    // The wallet setup popup instance (component defined above).
+    WalletPopup { id: walletPopup }
 }

@@ -616,6 +616,9 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
         "update" => op_update(args),
         "probe_storage" => op_probe_storage(args),
         "sign_tx" => op_sign_tx(args),
+        "wallet_create" => op_wallet_create(args),
+        "wallet_import" => op_wallet_import(args),
+        "wallet_status" => op_wallet_status(args),
         "lookup" => op_lookup(args),
         "lookup_bulk" => op_lookup_bulk(args),
         "search_build" => op_search_build(args),
@@ -1635,6 +1638,194 @@ fn catalog_pbf(st: &AppState, region: &str) -> Option<String> {
         .into_iter()
         .find(|c| c.region == region)
         .map(|c| c.path.display().to_string())
+}
+
+/// Where the wallet lives (default ~/.logos-osm/wallet/ — same as the
+/// create_wallet example). Override via the `wallet_dir` arg.
+fn wallet_dir(args: &Value) -> PathBuf {
+    str_arg(args, "wallet_dir")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".logos-osm")
+                .join("wallet")
+        })
+}
+
+fn wallet_overrides(seq_url: &str) -> Result<WalletConfigOverrides, String> {
+    Ok(WalletConfigOverrides {
+        sequencer: Some(SequencerConnectionData {
+            sequencer_addr: seq_url.parse().map_err(|e| format!("sequencer url: {e}"))?,
+            basic_auth: None,
+        }),
+        seq_tx_poll_max_blocks: Some(200),
+        seq_poll_max_retries: Some(2000),
+        seq_poll_timeout: Some(Duration::from_secs(3)),
+        ..Default::default()
+    })
+}
+
+/// Generate a fresh wallet on disk: new keypair, new "primary" account,
+/// funded from genesis. Returns the account ID + mnemonic. The mnemonic is
+/// only returned here — the user must save it; it is not recoverable from
+/// the storage file.
+fn op_wallet_create(args: &Value) -> *mut c_char {
+    let dir = wallet_dir(args);
+    let pw = str_arg(args, "wallet_password").unwrap_or_else(|| "testpw".to_string());
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first (need sequencer_url)");
+    };
+    if dir.join("config.json").exists() {
+        return err(format!(
+            "a wallet already exists at {} — use wallet_import to replace it, or wallet_status to read it",
+            dir.display()
+        ));
+    }
+    std::fs::create_dir_all(&dir).ok();
+    let overrides = match wallet_overrides(&st.sequencer_url) {
+        Ok(o) => o,
+        Err(e) => return err(e),
+    };
+    let (wallet, mnemonic) = match WalletCore::new_init_storage(
+        dir.join("config.json"),
+        dir.join("storage"),
+        Some(overrides),
+        &pw,
+    ) {
+        Ok(w) => w,
+        Err(e) => return err(format!("creating wallet: {e:#}")),
+    };
+    // Create the "primary" account (public key + account id).
+    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    ok(json!({
+        "created": true,
+        "account_id_hex": hex::encode(account_id.value()),
+        "mnemonic": mnemonic.to_string(),
+        "wallet_dir": dir.display().to_string()
+    }))
+}
+
+/// Import a wallet from a mnemonic (re-creates all derived keys). Wipes any
+/// existing wallet at the dir. Returns the primary account ID.
+fn op_wallet_import(args: &Value) -> *mut c_char {
+    let Some(mnemonic) = str_arg(args, "mnemonic") else {
+        return err("wallet_import requires mnemonic (the recovery phrase)");
+    };
+    let dir = wallet_dir(args);
+    let pw = str_arg(args, "wallet_password").unwrap_or_else(|| "testpw".to_string());
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first (need sequencer_url)");
+    };
+    let parsed = match bip39::Mnemonic::parse(&mnemonic) {
+        Ok(m) => m,
+        Err(e) => return err(format!("invalid mnemonic: {e}")),
+    };
+    // Wipe any existing wallet at this dir — importing replaces it.
+    if dir.join("config.json").exists() {
+        std::fs::remove_file(dir.join("config.json")).ok();
+        std::fs::remove_file(dir.join("storage")).ok();
+    }
+    std::fs::create_dir_all(&dir).ok();
+    let overrides = match wallet_overrides(&st.sequencer_url) {
+        Ok(o) => o,
+        Err(e) => return err(e),
+    };
+    // new_init_storage creates a fresh seed; restore_storage rebuilds from
+    // the imported mnemonic in place.
+    let (mut wallet, _new_mnemonic) = match WalletCore::new_init_storage(
+        dir.join("config.json"),
+        dir.join("storage"),
+        Some(overrides.clone()),
+        &pw,
+    ) {
+        Ok(w) => w,
+        Err(e) => return err(format!("initializing wallet storage: {e:#}")),
+    };
+    if let Err(e) = wallet.restore_storage(&parsed, &pw) {
+        return err(format!("restoring from mnemonic: {e:#}"));
+    }
+    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    ok(json!({
+        "imported": true,
+        "account_id_hex": hex::encode(account_id.value()),
+        "wallet_dir": dir.display().to_string()
+    }))
+}
+
+/// Check whether a wallet exists at the configured dir, and (if so) return
+/// the primary account ID. Errors if no wallet is present.
+fn op_wallet_status(args: &Value) -> *mut c_char {
+    let dir = wallet_dir(args);
+    if !dir.join("config.json").exists() {
+        return ok(json!({ "present": false, "wallet_dir": dir.display().to_string() }));
+    }
+    let pw = str_arg(args, "wallet_password").unwrap_or_else(|| "testpw".to_string());
+    let Some(st) = state_snapshot(args) else {
+        return err("osm not open: call open first (need sequencer_url)");
+    };
+    let overrides = match wallet_overrides(&st.sequencer_url) {
+        Ok(o) => o,
+        Err(e) => return err(e),
+    };
+    let wallet = match WalletCore::new_update_chain(
+        dir.join("config.json"),
+        dir.join("storage"),
+        Some(overrides),
+    ) {
+        Ok(w) => w,
+        Err(e) => return err(format!("opening wallet: {e:#}")),
+    };
+    let _ = pw;
+    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    ok(json!({
+        "present": true,
+        "account_id_hex": hex::encode(account_id.value()),
+        "wallet_dir": dir.display().to_string()
+    }))
+}
+
+// Create (or open) a "primary" account on a fresh wallet. Returns the
+// account id, or an error string. Does NOT auto-fund (funding is a testnet
+// convenience — run `cargo run -p osm-integration-tests --example fund_wallet`
+// separately; the account exists + can be made a registrar whether funded or
+// not, and registration gas comes from the signer's balance).
+async fn wallet_account_or_err(
+    mut wallet: WalletCore,
+    label: &str,
+    _sequencer_url: &str,
+) -> Result<lee_core::account::AccountId, String> {
+    use wallet::cli::{
+        account::{AccountSubcommand, NewSubcommand},
+        Command, SubcommandReturnValue,
+    };
+    let result = wallet::cli::execute_subcommand(
+        &mut wallet,
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: Some(label.to_string().into()),
+        })),
+    )
+    .await
+    .map_err(|e| format!("creating {label} account: {e:#}"))?;
+    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        return Err(format!("expected a registered account id for {label}"));
+    };
+    wallet
+        .sync_to_latest_block()
+        .await
+        .map_err(|e| format!("post-create sync: {e:#}"))?;
+    Ok(account_id)
 }
 
 /// A running search_build for the same region would duplicate work and

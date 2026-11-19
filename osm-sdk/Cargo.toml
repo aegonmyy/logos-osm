@@ -19,6 +19,7 @@ lee.workspace = true
 lee_core.workspace = true
 # AccountIdentity for mapping built txs onto wallet signing sets.
 wallet.workspace = true
+bip39.workspace = true
 sequencer_service_rpc.workspace = true
 risc0-zkvm.workspace = true
 sha2.workspace = true
@@ -35,6 +36,13 @@ futures.workspace = true
 bytes.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+
+# Search index: one SQLite file per region (FTS5 names + r-tree spatial),
+# built from the region PBF. "bundled" compiles SQLite in with FTS5 and
+# RTREE enabled, so the index is a single portable artifact with no
+# service to run. flate2 decompresses PBF zlib blobs.
+rusqlite = { version = "0.32", features = ["bundled"] }
+flate2 = "1"
 
 # md5-asm does not support Windows targets; gate the asm feature to
 # non-Windows (the pure-Rust implementation is fine there).
