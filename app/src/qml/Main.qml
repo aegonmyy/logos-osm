@@ -723,21 +723,21 @@ Item {
         // A finished wallet job resolves the setup popup: done stage shows
         // the account details; an error shows the failure message.
         if (j.op === "wallet_create" || j.op === "wallet_import") {
-            wp.stage = "done"
+            walletPopup.stage = "done"
             if (j.state === "done" && j.result) {
-                wp.accountHex = j.result.account_id_hex || ""
-                wp.accountB58 = j.result.account_id_b58 || ""
-                wp.mnemonic = j.result.mnemonic || ""
-                wp.balance = ""
-                wp.resultMsg = j.result.created
+                walletPopup.accountHex = j.result.account_id_hex || ""
+                walletPopup.accountB58 = j.result.account_id_b58 || ""
+                walletPopup.mnemonic = j.result.mnemonic || ""
+                walletPopup.balance = ""
+                walletPopup.resultMsg = j.result.created
                     ? "Wallet created. Fund it with: cargo run -p osm-integration-tests --example fund_wallet"
                     : "Wallet imported from mnemonic."
             } else {
-                wp.accountHex = ""
-                wp.accountB58 = ""
-                wp.mnemonic = ""
-                wp.balance = ""
-                wp.resultMsg = j.error || "wallet job failed"
+                walletPopup.accountHex = ""
+                walletPopup.accountB58 = ""
+                walletPopup.mnemonic = ""
+                walletPopup.balance = ""
+                walletPopup.resultMsg = j.error || "wallet job failed"
             }
         }
     }
@@ -1022,35 +1022,29 @@ Item {
                     const next = Object.assign({}, root.jobPolls)
                     next[r.result.job_id] = { taskId: t.id, host: false }
                     root.jobPolls = next
-                    wp.resultMsg = op === "wallet_create"
+                    walletPopup.resultMsg = op === "wallet_create"
                         ? "Generating wallet (syncs against the testnet - can take a couple of minutes)..."
                         : "Importing wallet (syncing)..."
                 }
             } else {
-                wp.stage = "done"
-                wp.accountHex = ""
-                wp.accountB58 = ""
-                wp.mnemonic = ""
-                wp.balance = ""
-                wp.resultMsg = r.error || "wallet op failed"
+                walletPopup.stage = "done"
+                walletPopup.accountHex = ""
+                walletPopup.accountB58 = ""
+                walletPopup.mnemonic = ""
+                walletPopup.balance = ""
+                walletPopup.resultMsg = r.error || "wallet op failed"
             }
         } else if (op === "wallet_status") {
-            if (r.ok && r.result) {
-                wp.stage = "done"
-                wp.accountHex = r.result.account_id_hex || ""
-                wp.accountB58 = r.result.account_id_b58 || ""
-                wp.mnemonic = r.result.mnemonic || ""
-                wp.balance = r.result.balance !== undefined && r.result.balance !== null
-                             ? String(r.result.balance) + " atomic units" : ""
-                wp.resultMsg = r.result.present ? "Wallet already set up." : "No wallet found. Generate or import one."
-            } else {
-                wp.stage = "done"
-                wp.accountHex = ""
-                wp.accountB58 = ""
-                wp.mnemonic = ""
-                wp.balance = ""
-                wp.resultMsg = r.error || "wallet op failed"
+            if (r.ok && r.result && r.result.present) {
+                walletPopup.stage = "done"
+                walletPopup.accountHex = r.result.account_id_hex || ""
+                walletPopup.accountB58 = r.result.account_id_b58 || ""
+                walletPopup.mnemonic = ""
+                walletPopup.balance = r.result.last_synced_block !== undefined
+                             ? "synced to block " + r.result.last_synced_block : ""
+                walletPopup.resultMsg = "Wallet already set up."
             }
+            // present=false or an error: stay at the intro (Generate/Import)
         }
         // The 1 Hz job_status polls are bookkeeping, not results — keep
         // them out of the output consoles. Likewise the deterministic
@@ -1811,6 +1805,9 @@ Item {
         onOpened: {
             wp.stage = "intro"; wp.resultMsg = ""
             wp.accountHex = ""; wp.accountB58 = ""; wp.balance = ""; wp.mnemonic = ""
+            // An existing wallet shows its account details immediately
+            // (fast file read, no sync); no wallet -> the intro.
+            root.call("wallet_status", {})
         }
         ColumnLayout {
             anchors.fill: parent
@@ -2013,6 +2010,13 @@ Item {
                             root.saveConnectFields()
                             wp.close()
                         }
+                    }
+                    SButton {
+                        // Shown on a failed generate/import: a wallet may
+                        // already exist — one click shows its details.
+                        text: "Show my wallet"
+                        visible: wp.accountHex.length === 0
+                        onClicked: root.call("wallet_status", {})
                     }
                     SButton {
                         text: "close"

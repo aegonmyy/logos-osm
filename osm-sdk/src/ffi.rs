@@ -1700,43 +1700,39 @@ fn op_wallet_import(args: &Value) -> *mut c_char {
 }
 
 /// Check whether a wallet exists at the configured dir, and (if so) return
-/// the primary account ID. Errors if no wallet is present.
+/// the primary account ID. Deliberately FAST: reads the storage JSON
+/// directly (no WalletCore open, no network sync) so the popup can call it
+/// on every open. No balance (that needs a sync).
 fn op_wallet_status(args: &Value) -> *mut c_char {
     let dir = wallet_dir(args);
     if !dir.join("config.json").exists() {
         return ok(json!({ "present": false, "wallet_dir": dir.display().to_string() }));
     }
-    let pw = str_arg(args, "wallet_password").unwrap_or_else(|| "testpw".to_string());
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first (need sequencer_url)");
+    let storage = match std::fs::read_to_string(dir.join("storage")) {
+        Ok(s) => s,
+        Err(e) => return err(format!("reading wallet storage: {e:#}")),
     };
-    let overrides = match wallet_overrides(&st.sequencer_url) {
-        Ok(o) => o,
-        Err(e) => return err(e),
+    let v: Value = match serde_json::from_str(&storage) {
+        Ok(v) => v,
+        Err(e) => return err(format!("parsing wallet storage: {e:#}")),
     };
-    let wallet = match WalletCore::new_update_chain(
-        dir.join("config.json"),
-        dir.join("storage"),
-        Some(overrides),
-    ) {
-        Ok(w) => w,
-        Err(e) => return err(format!("opening wallet: {e:#}")),
+    let b58 = v
+        .pointer("/labels/primary/Public")
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let Some(b58) = b58 else {
+        return err("wallet has no 'primary' account (create one first)");
     };
-    let _ = pw;
-    let (account_id, wallet) = match block_on(wallet_account_or_err(wallet, "primary")) {
-        Ok((id, wal)) => (id, wal),
-        Err(e) => return err(e),
+    let account_id: lee_core::account::AccountId = match b58.parse() {
+        Ok(a) => a,
+        Err(e) => return err(format!("primary account id: {e}")),
     };
-    // The sync in wallet_account_or_err already ran; read the balance now.
-    let balance = match block_on(wallet.get_account_balance(account_id)) {
-        Ok(b) => json!(b),
-        Err(_) => Value::Null,
-    };
+    let synced = v.get("last_synced_block").and_then(|x| x.as_u64());
     ok(json!({
         "present": true,
         "account_id_hex": hex::encode(account_id.value()),
-        "account_id_b58": account_id.to_string(),
-        "balance": balance,
+        "account_id_b58": b58,
+        "last_synced_block": synced,
         "wallet_dir": dir.display().to_string()
     }))
 }
