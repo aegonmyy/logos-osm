@@ -621,11 +621,11 @@ fn dispatch_op(name: &str, args: &Value) -> *mut c_char {
         "wallet_status" => op_wallet_status(args),
         "lookup" => op_lookup(args),
         "lookup_bulk" => op_lookup_bulk(args),
-        "search_build" => op_search_build(args),
-        "geocode" => op_geocode(args),
-        "reverse_geocode" => op_reverse_geocode(args),
-        "search_index_status" => op_search_index_status(args),
-        "search_snapshot" => op_search_snapshot(args),
+        "geocode" => err("search moved to the osm_search module"),
+        "reverse_geocode" => err("search moved to the osm_search module"),
+        "search_build" => err("search moved to the osm_search module"),
+        "search_index_status" => err("search moved to the osm_search module"),
+        "search_snapshot" => err("search moved to the osm_search module"),
         "catalog" => with_state(args, |st| {
             Ok(client(st)
                 .catalog()
@@ -1116,10 +1116,6 @@ fn op_fetch(args: &Value) -> *mut c_char {
                 "a long job is already running ({existing}); wait for it to finish, or clear tasks to stop it and start a new one"
             ));
         }
-        // Auto-index after import (default on; `index: false` opts out): the
-        // fetched PBF is on disk and in the catalog, so the search index
-        // builds as its own background job and geocode starts answering.
-        let index_after = args.get("index").and_then(Value::as_bool).unwrap_or(true);
         let (jr, jc, jm) = (region.clone(), cid.clone(), checksum);
         let job_st = st.clone();
         let progress = crate::progress::JobProgress::new();
@@ -1132,35 +1128,12 @@ fn op_fetch(args: &Value) -> *mut c_char {
             let summary = rt()
                 .block_on(c.import_local(&jr, &outcome.path))
                 .map_err(|e| format!("import {jr}: {e:#}"))?;
-            let index_job = if index_after {
-                let db = crate::search::index_path(std::path::Path::new(&job_st.cache_dir), &jr)
-                    .display()
-                    .to_string();
-                let (ir, ip, idb) = (jr.clone(), outcome.path.display().to_string(), db);
-                Some(spawn_job(
-                    "search_build",
-                    format!("search_build {ir}"),
-                    None,
-                    move || {
-                        let stats = crate::search::build_index(
-                            &ir,
-                            std::path::Path::new(&ip),
-                            std::path::Path::new(&idb),
-                        )
-                        .map_err(|e| format!("search_build {ir}: {e:#}"))?;
-                        serde_json::to_value(stats).map_err(|e| e.to_string())
-                    },
-                ))
-            } else {
-                None
-            };
             Ok(json!({
                 "region": summary.region,
                 "bytes": summary.bytes,
                 "blobs": summary.blobs,
                 "md5_verified": hex::encode(summary.md5),
                 "path": outcome.path.display().to_string(),
-                "index_job": index_job,
             }))
         });
         return ok(json!({ "job_id": id, "op": "fetch", "region": region }));
@@ -1235,40 +1208,10 @@ fn op_import(args: &Value) -> *mut c_char {
         }))
     } else {
         match block_on(c.import_local(&region, path)) {
-            Ok(s) => {
-                // Auto-index (default on; `index: false` opts out): the
-                // import put the PBF in the catalog, so the search index
-                // builds in the background as its own job.
-                let index_after = args.get("index").and_then(Value::as_bool).unwrap_or(true);
-                let index_job = if index_after {
-                    let db =
-                        crate::search::index_path(std::path::Path::new(&st.cache_dir), &region)
-                            .display()
-                            .to_string();
-                    let (ir, ip, idb) = (region.clone(), pbf.clone(), db);
-                    Some(spawn_job(
-                        "search_build",
-                        format!("search_build {ir}"),
-                        None,
-                        move || {
-                            let stats = crate::search::build_index(
-                                &ir,
-                                std::path::Path::new(&ip),
-                                std::path::Path::new(&idb),
-                            )
-                            .map_err(|e| format!("search_build {ir}: {e:#}"))?;
-                            serde_json::to_value(stats).map_err(|e| e.to_string())
-                        },
-                    ))
-                } else {
-                    None
-                };
-                ok(json!({
-                    "region": s.region, "bytes": s.bytes, "blobs": s.blobs,
-                    "md5": hex::encode(s.md5),
-                    "index_job": index_job,
-                }))
-            }
+            Ok(s) => ok(json!({
+                "region": s.region, "bytes": s.bytes, "blobs": s.blobs,
+                "md5": hex::encode(s.md5),
+            })),
             Err(e) => err(format!("import: {e:#}")),
         }
     }
@@ -1621,25 +1564,6 @@ fn op_sign_tx(args: &Value) -> *mut c_char {
 // helpers
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Search ops
-//
-// The geocode path never touches the network: it queries the local
-// per-region SQLite indexes under <cache_dir>/search/. Building an index
-// (search_build) reads the region PBF already on disk and runs as a job
-// (minutes for a full country). Nothing here fetches anything — that is
-// the app's explicit user decision, made through the existing fetch ops.
-// ---------------------------------------------------------------------------
-
-/// The pbf path for a region from the local catalog (its imported file).
-fn catalog_pbf(st: &AppState, region: &str) -> Option<String> {
-    client(st)
-        .catalog()
-        .into_iter()
-        .find(|c| c.region == region)
-        .map(|c| c.path.display().to_string())
-}
-
 /// Where the wallet lives (default ~/.logos-osm/wallet/ — same as the
 /// create_wallet example). Override via the `wallet_dir` arg.
 fn wallet_dir(args: &Value) -> PathBuf {
@@ -1688,26 +1612,34 @@ fn op_wallet_create(args: &Value) -> *mut c_char {
         Ok(o) => o,
         Err(e) => return err(e),
     };
-    let (wallet, mnemonic) = match WalletCore::new_init_storage(
-        dir.join("config.json"),
-        dir.join("storage"),
-        Some(overrides),
-        &pw,
-    ) {
-        Ok(w) => w,
-        Err(e) => return err(format!("creating wallet: {e:#}")),
-    };
-    // Create the "primary" account (public key + account id).
-    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
-        Ok(id) => id,
-        Err(e) => return err(e),
-    };
-    ok(json!({
-        "created": true,
-        "account_id_hex": hex::encode(account_id.value()),
-        "mnemonic": mnemonic.to_string(),
-        "wallet_dir": dir.display().to_string()
-    }))
+    // The wallet sync takes minutes against the flaky testnet — run as a
+    // background job so the op returns a job_id instantly (the >~1min sync
+    // result would be dropped by the RemoteObjects transport otherwise).
+    let job_id = spawn_job(
+        "wallet_create",
+        "generate wallet".to_string(),
+        None,
+        move || {
+            let (wallet, mnemonic) = WalletCore::new_init_storage(
+                dir.join("config.json"),
+                dir.join("storage"),
+                Some(overrides),
+                &pw,
+            )
+            .map_err(|e| format!("creating wallet: {e:#}"))?;
+            let (account_id, _wallet) = rt()
+                .block_on(wallet_account_or_err(wallet, "primary"))
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "created": true,
+                "account_id_hex": hex::encode(account_id.value()),
+                "account_id_b58": account_id.to_string(),
+                "mnemonic": mnemonic.to_string(),
+                "wallet_dir": dir.display().to_string()
+            }))
+        },
+    );
+    ok(json!({ "job_id": job_id, "op": "wallet_create" }))
 }
 
 /// Import a wallet from a mnemonic (re-creates all derived keys). Wipes any
@@ -1735,29 +1667,36 @@ fn op_wallet_import(args: &Value) -> *mut c_char {
         Ok(o) => o,
         Err(e) => return err(e),
     };
-    // new_init_storage creates a fresh seed; restore_storage rebuilds from
-    // the imported mnemonic in place.
-    let (mut wallet, _new_mnemonic) = match WalletCore::new_init_storage(
-        dir.join("config.json"),
-        dir.join("storage"),
-        Some(overrides.clone()),
-        &pw,
-    ) {
-        Ok(w) => w,
-        Err(e) => return err(format!("initializing wallet storage: {e:#}")),
-    };
-    if let Err(e) = wallet.restore_storage(&parsed, &pw) {
-        return err(format!("restoring from mnemonic: {e:#}"));
-    }
-    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
-        Ok(id) => id,
-        Err(e) => return err(e),
-    };
-    ok(json!({
-        "imported": true,
-        "account_id_hex": hex::encode(account_id.value()),
-        "wallet_dir": dir.display().to_string()
-    }))
+    // Background job (the wallet sync takes minutes — see wallet_create).
+    let job_id = spawn_job(
+        "wallet_import",
+        "import wallet".to_string(),
+        None,
+        move || {
+            // new_init_storage creates a fresh seed; restore_storage rebuilds
+            // from the imported mnemonic in place.
+            let (mut wallet, _new_mnemonic) = WalletCore::new_init_storage(
+                dir.join("config.json"),
+                dir.join("storage"),
+                Some(overrides),
+                &pw,
+            )
+            .map_err(|e| format!("initializing wallet storage: {e:#}"))?;
+            wallet
+                .restore_storage(&parsed, &pw)
+                .map_err(|e| format!("restoring from mnemonic: {e:#}"))?;
+            let (account_id, _wallet) = rt()
+                .block_on(wallet_account_or_err(wallet, "primary"))
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "imported": true,
+                "account_id_hex": hex::encode(account_id.value()),
+                "account_id_b58": account_id.to_string(),
+                "wallet_dir": dir.display().to_string()
+            }))
+        },
+    );
+    ok(json!({ "job_id": job_id, "op": "wallet_import" }))
 }
 
 /// Check whether a wallet exists at the configured dir, and (if so) return
@@ -1784,13 +1723,20 @@ fn op_wallet_status(args: &Value) -> *mut c_char {
         Err(e) => return err(format!("opening wallet: {e:#}")),
     };
     let _ = pw;
-    let account_id = match block_on(wallet_account_or_err(wallet, "primary", &st.sequencer_url)) {
-        Ok(id) => id,
+    let (account_id, wallet) = match block_on(wallet_account_or_err(wallet, "primary")) {
+        Ok((id, wal)) => (id, wal),
         Err(e) => return err(e),
+    };
+    // The sync in wallet_account_or_err already ran; read the balance now.
+    let balance = match block_on(wallet.get_account_balance(account_id)) {
+        Ok(b) => json!(b),
+        Err(_) => Value::Null,
     };
     ok(json!({
         "present": true,
         "account_id_hex": hex::encode(account_id.value()),
+        "account_id_b58": account_id.to_string(),
+        "balance": balance,
         "wallet_dir": dir.display().to_string()
     }))
 }
@@ -1803,8 +1749,7 @@ fn op_wallet_status(args: &Value) -> *mut c_char {
 async fn wallet_account_or_err(
     mut wallet: WalletCore,
     label: &str,
-    _sequencer_url: &str,
-) -> Result<lee_core::account::AccountId, String> {
+) -> Result<(lee_core::account::AccountId, WalletCore), String> {
     use wallet::cli::{
         account::{AccountSubcommand, NewSubcommand},
         Command, SubcommandReturnValue,
@@ -1821,198 +1766,28 @@ async fn wallet_account_or_err(
     let SubcommandReturnValue::RegisterAccount { account_id } = result else {
         return Err(format!("expected a registered account id for {label}"));
     };
-    wallet
-        .sync_to_latest_block()
-        .await
-        .map_err(|e| format!("post-create sync: {e:#}"))?;
-    Ok(account_id)
-}
-
-/// A running search_build for the same region would duplicate work and
-/// race the atomic rename at the end; refuse it (host/fetch stay free to
-/// run — an index build is CPU work, not a network stream).
-fn running_search_build(region: &str) -> bool {
-    JOBS.lock()
-        .unwrap()
-        .iter()
-        .any(|j| j.state == "running" && j.op == "search_build" && j.label.contains(region))
-}
-
-fn op_search_build(args: &Value) -> *mut c_char {
-    let Some(region) = str_arg(args, "region") else {
-        return err("search_build requires region");
-    };
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first");
-    };
-    // Explicit pbf wins (index a file the caller names); else the
-    // cataloged import for the region.
-    let pbf = match str_arg(args, "pbf") {
-        Some(p) => p,
-        None => match catalog_pbf(&st, &region) {
-            Some(p) => p,
-            None => {
-                return err(format!(
-                    "region {region} has no imported PBF in the catalog — import or fetch it first, or pass an explicit pbf path"
-                ))
+    // The testnet endpoint 502s in bursts; retry the sync on transient
+    // failures (10s backoff, up to 12 attempts) before giving up.
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match wallet.sync_to_latest_block().await {
+            Ok(_) => break,
+            Err(e) => {
+                let m = e.to_string();
+                let transient = m.contains("502")
+                    || m.contains("timed out")
+                    || m.contains("connection closed")
+                    || m.contains("connection refused");
+                if transient && attempt < 12 {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+                return Err(format!("post-create sync: {e:#}"));
             }
-        },
-    };
-    if !std::path::Path::new(&pbf).exists() {
-        return err(format!("pbf file not found: {pbf}"));
+        }
     }
-    if running_search_build(&region) {
-        return err(format!("an index build for {region} is already running"));
-    }
-    let db = crate::search::index_path(std::path::Path::new(&st.cache_dir), &region)
-        .display()
-        .to_string();
-    let label = format!("search_build {region}");
-    if args.get("job").and_then(Value::as_bool).unwrap_or(false) {
-        let (jr, jp, jd) = (region.clone(), pbf.clone(), db.clone());
-        let id = spawn_job("search_build", label, None, move || {
-            let stats = crate::search::build_index(
-                &jr,
-                std::path::Path::new(&jp),
-                std::path::Path::new(&jd),
-            )
-            .map_err(|e| format!("search_build {jr}: {e:#}"))?;
-            serde_json::to_value(stats).map_err(|e| e.to_string())
-        });
-        return ok(json!({ "job_id": id, "op": "search_build", "region": region }));
-    }
-    match crate::search::build_index(
-        &region,
-        std::path::Path::new(&pbf),
-        std::path::Path::new(&db),
-    ) {
-        Ok(stats) => ok(serde_json::to_value(stats).unwrap_or(Value::Null)),
-        Err(e) => err(format!("search_build {region}: {e:#}")),
-    }
-}
-
-fn op_geocode(args: &Value) -> *mut c_char {
-    let Some(query) = str_arg(args, "query") else {
-        return err("geocode requires query");
-    };
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first");
-    };
-    let regions: Option<Vec<String>> = str_arg(args, "regions").map(|r| {
-        r.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    });
-    let cache = std::path::Path::new(&st.cache_dir);
-    match crate::search::geocode_all(cache, &query, regions.as_deref(), limit) {
-        Ok(outcome) => ok(serde_json::to_value(outcome).unwrap_or(Value::Null)),
-        Err(e) => err(format!("geocode: {e:#}")),
-    }
-}
-
-fn op_reverse_geocode(args: &Value) -> *mut c_char {
-    let lat = args.get("lat").and_then(Value::as_f64);
-    let lon = args.get("lon").and_then(Value::as_f64);
-    let (Some(lat), Some(lon)) = (lat, lon) else {
-        return err("reverse_geocode requires lat and lon");
-    };
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first");
-    };
-    let cache = std::path::Path::new(&st.cache_dir);
-    match crate::search::reverse_all(cache, lat, lon) {
-        Ok(hit) => ok(serde_json::to_value(hit).unwrap_or(Value::Null)),
-        Err(e) => err(format!("reverse_geocode: {e:#}")),
-    }
-}
-
-fn op_search_index_status(args: &Value) -> *mut c_char {
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first");
-    };
-    let catalog: Vec<(String, [u8; 16])> = client(&st)
-        .catalog()
-        .into_iter()
-        .map(|c| (c.region, c.md5))
-        .collect();
-    let cache = std::path::Path::new(&st.cache_dir);
-    let all = crate::search::status_all(cache, &catalog);
-    // One region filter, else everything.
-    let region = str_arg(args, "region");
-    let out: Vec<_> = match region {
-        Some(r) => all.into_iter().filter(|s| s.region == r).collect(),
-        None => all,
-    };
-    ok(json!({ "indexes": out, "count": out.len() }))
-}
-
-/// A locator snapshot PNG for a search result, base64 in the reply so the
-/// QML Image can consume it as a data URL without any file the sandbox's
-/// URL interceptor would block.
-fn op_search_snapshot(args: &Value) -> *mut c_char {
-    let Some(region) = str_arg(args, "region") else {
-        return err("search_snapshot requires region");
-    };
-    let lat = args.get("lat").and_then(Value::as_f64);
-    let lon = args.get("lon").and_then(Value::as_f64);
-    let (Some(lat), Some(lon)) = (lat, lon) else {
-        return err("search_snapshot requires lat and lon");
-    };
-    let label = str_arg(args, "label").unwrap_or_default();
-    let sub_label = str_arg(args, "admin_path")
-        .map(|p| {
-            p.split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    let Some(st) = state_snapshot(args) else {
-        return err("osm not open: call open first");
-    };
-    let db = crate::search::index_path(std::path::Path::new(&st.cache_dir), &region);
-    let conn = match crate::search::open_index(&db) {
-        Ok(c) => c,
-        Err(e) => return err(format!("{e:#}")),
-    };
-    match crate::search::render_locator_png(&conn, lat, lon, &label, &sub_label) {
-        Ok(png) => ok(json!({
-            "png_base64": base64_encode(&png),
-            "width": 640,
-            "height": 480,
-            "region": region,
-        })),
-        Err(e) => err(format!("search_snapshot: {e:#}")),
-    }
-}
-
-/// Minimal standard base64 (no dependency): the PNG is a few tens of KB,
-/// so a compact table-driven encoder is fine.
-fn base64_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[(triple >> 18) as usize & 0x3f] as char);
-        out.push(TABLE[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    out
+    Ok((account_id, wallet))
 }
 
 fn str_arg(args: &Value, key: &str) -> Option<String> {
