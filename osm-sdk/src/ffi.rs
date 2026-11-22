@@ -1497,13 +1497,7 @@ fn op_sign_tx(args: &Value) -> *mut c_char {
     let wallet_dir = str_arg(args, "wallet_dir").map(PathBuf::from);
     let label = format!("sign {} on-chain", region);
     let job_id = spawn_job("sign_tx", label, None, move || {
-        let dir = wallet_dir.unwrap_or_else(|| {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join(".logos-osm")
-                .join("wallet")
-        });
+        let dir = wallet_dir.unwrap_or_else(|| home_dir_path().join(".logos-osm").join("wallet"));
         let config_path = dir.join("config.json");
         let storage_path = dir.join("storage");
         if !config_path.exists() {
@@ -1564,18 +1558,22 @@ fn op_sign_tx(args: &Value) -> *mut c_char {
 // helpers
 // ---------------------------------------------------------------------------
 
+/// Resolve the user's home directory. `HOME` is set on Unix; on Windows it is
+/// usually unset, so fall back to `USERPROFILE` before giving up (an empty
+/// path, which the caller joins relative paths onto).
+fn home_dir_path() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 /// Where the wallet lives (default ~/.logos-osm/wallet/ — same as the
 /// create_wallet example). Override via the `wallet_dir` arg.
 fn wallet_dir(args: &Value) -> PathBuf {
     str_arg(args, "wallet_dir")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join(".logos-osm")
-                .join("wallet")
-        })
+        .unwrap_or_else(|| home_dir_path().join(".logos-osm").join("wallet"))
 }
 
 fn wallet_overrides(seq_url: &str) -> Result<WalletConfigOverrides, String> {

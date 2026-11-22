@@ -5837,7 +5837,7 @@ dependencies = [
 
 [[package]]
 name = "logos-osm"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "bip39",
@@ -5867,7 +5867,7 @@ dependencies = [
 
 [[package]]
 name = "logos-osm-cli"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "borsh",
@@ -6874,7 +6874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "osm-core"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "borsh",
  "lee_core",
@@ -6884,7 +6884,7 @@ dependencies = [
 
 [[package]]
 name = "osm-guest-builder"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "hex",
@@ -6893,7 +6893,7 @@ dependencies = [
 
 [[package]]
 name = "osm-integration-tests"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "borsh",
@@ -6918,7 +6918,7 @@ dependencies = [
 
 [[package]]
 name = "osm-registry"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "lee",
  "risc0-zkvm",
@@ -6926,7 +6926,7 @@ dependencies = [
 
 [[package]]
 name = "osm-registry-guest"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "borsh",
  "lee_core",

@@ -30,7 +30,7 @@ public:
     ~OsmAppPlugin() override;
 
     QString name()    const override { return QStringLiteral("osm_app"); }
-    QString version() const override { return QStringLiteral("1.7.0"); }
+    QString version() const override { return QStringLiteral("1.7.1"); }
 
     Q_INVOKABLE void initLogos(LogosAPI* api);
 
