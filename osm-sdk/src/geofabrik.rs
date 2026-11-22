@@ -506,21 +506,21 @@ mod tests {
             { "type": "Feature",
               "properties": { "id": "kenya", "parent": "africa", "name": "Kenya",
                 "iso3166-1:alpha2": ["KE"],
-                "urls": { "pbf": "https://download.geofabrik.de/africa/kenya-latest.osm.pbf",
+                "urls": { "pbf": "https://download.geofabrik.de/africa/kenya/kenya-latest.osm.pbf",
                           "shp": "https://download.geofabrik.de/africa/kenya-latest-free.shp.zip" } } },
             { "type": "Feature",
               "properties": { "id": "germany", "parent": "europe", "name": "Germany",
-                "urls": { "pbf": "https://download.geofabrik.de/europe/germany-latest.osm.pbf" } } },
+                "urls": { "pbf": "https://download.geofabrik.de/europe/germany/germany-latest.osm.pbf" } } },
             { "type": "Feature",
               "properties": { "id": "us/california", "parent": "us", "name": "California",
-                "urls": { "pbf": "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf" } } },
+                "urls": { "pbf": "https://download.geofabrik.de/north-america/us/california/california-latest.osm.pbf" } } },
             { "type": "Feature",
               "properties": { "id": "central-fed-district", "parent": "russia",
                 "name": "Central Federal District",
-                "urls": { "pbf": "https://download.geofabrik.de/russia/central-fed-district-latest.osm.pbf" } } },
+                "urls": { "pbf": "https://download.geofabrik.de/russia/central-fed-district/central-fed-district-latest.osm.pbf" } } },
             { "type": "Feature",
               "properties": { "id": "ireland-and-northern-ireland", "parent": "europe",
-                "urls": { "pbf": "https://download.geofabrik.de/europe/ireland-and-northern-ireland-latest.osm.pbf" } } }
+                "urls": { "pbf": "https://download.geofabrik.de/europe/ireland-and-northern-ireland/ireland-and-northern-ireland-latest.osm.pbf" } } }
         ]
     }"#;
 
@@ -596,7 +596,7 @@ mod tests {
         let info = region_info_from_index(&entries, by_path("germany").unwrap()).unwrap();
         assert_eq!(
             info.pbf_url,
-            "https://download.geofabrik.de/europe/germany-latest.osm.pbf"
+            "https://download.geofabrik.de/europe/germany/germany-latest.osm.pbf"
         );
     }
 
@@ -609,7 +609,7 @@ mod tests {
         let r = by_path("germany").unwrap();
         assert_eq!(
             r.checksum_url(),
-            "https://download.geofabrik.de/europe/germany-latest.osm.pbf.md5"
+            "https://download.geofabrik.de/europe/germany/germany-latest.osm.pbf.md5"
         );
         let _ = c; // client retained for the live smoke test below
     }
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(real.mirror(&url), url);
         assert_eq!(
             fixture.mirror(&url),
-            "http://127.0.0.1:3917/europe/germany-latest.osm.pbf"
+            "http://127.0.0.1:3917/europe/germany/germany-latest.osm.pbf"
         );
         // A URL that is not a table URL passes through unchanged (no
         // accidental rewrite of foreign hosts).

@@ -132,155 +132,200 @@ macro_rules! subregion {
 /// 52 countries.
 pub const REGIONS: &[Region] = &[
     // Europe (country level)
-    country!("germany", "Germany", "Europe", "europe/germany"),
-    country!("france", "France", "Europe", "europe/france"),
+    country!("germany", "Germany", "Europe", "europe/germany/germany"),
+    country!("france", "France", "Europe", "europe/france/france"),
     country!(
         "great-britain",
         "United Kingdom",
         "Europe",
-        "europe/great-britain"
+        "europe/great-britain/great-britain"
     ),
-    country!("italy", "Italy", "Europe", "europe/italy"),
-    country!("spain", "Spain", "Europe", "europe/spain"),
-    country!("poland", "Poland", "Europe", "europe/poland"),
-    country!("netherlands", "Netherlands", "Europe", "europe/netherlands"),
-    country!("belgium", "Belgium", "Europe", "europe/belgium"),
-    country!("switzerland", "Switzerland", "Europe", "europe/switzerland"),
-    country!("austria", "Austria", "Europe", "europe/austria"),
+    country!("italy", "Italy", "Europe", "europe/italy/italy"),
+    country!("spain", "Spain", "Europe", "europe/spain/spain"),
+    country!("poland", "Poland", "Europe", "europe/poland/poland"),
+    country!(
+        "netherlands",
+        "Netherlands",
+        "Europe",
+        "europe/netherlands/netherlands"
+    ),
+    country!("belgium", "Belgium", "Europe", "europe/belgium/belgium"),
+    country!(
+        "switzerland",
+        "Switzerland",
+        "Europe",
+        "europe/switzerland/switzerland"
+    ),
+    country!("austria", "Austria", "Europe", "europe/austria/austria"),
     country!(
         "czech-republic",
         "Czech Republic",
         "Europe",
-        "europe/czech-republic"
+        "europe/czech-republic/czech-republic"
     ),
-    country!("sweden", "Sweden", "Europe", "europe/sweden"),
-    country!("norway", "Norway", "Europe", "europe/norway"),
-    country!("denmark", "Denmark", "Europe", "europe/denmark"),
-    country!("finland", "Finland", "Europe", "europe/finland"),
-    country!("portugal", "Portugal", "Europe", "europe/portugal"),
-    country!("greece", "Greece", "Europe", "europe/greece"),
+    country!("sweden", "Sweden", "Europe", "europe/sweden/sweden"),
+    country!("norway", "Norway", "Europe", "europe/norway/norway"),
+    country!("denmark", "Denmark", "Europe", "europe/denmark/denmark"),
+    country!("finland", "Finland", "Europe", "europe/finland/finland"),
+    country!("portugal", "Portugal", "Europe", "europe/portugal/portugal"),
+    country!("greece", "Greece", "Europe", "europe/greece/greece"),
     country!(
         "ireland",
         "Ireland",
         "Europe",
-        "europe/ireland-and-northern-ireland"
+        "europe/ireland-and-northern-ireland/ireland-and-northern-ireland"
     ),
-    country!("hungary", "Hungary", "Europe", "europe/hungary"),
-    country!("romania", "Romania", "Europe", "europe/romania"),
-    country!("bulgaria", "Bulgaria", "Europe", "europe/bulgaria"),
-    country!("ukraine", "Ukraine", "Europe", "europe/ukraine"),
-    country!("belarus", "Belarus", "Europe", "europe/belarus"),
-    country!("turkey", "Turkey", "Europe", "europe/turkey"),
+    country!("hungary", "Hungary", "Europe", "europe/hungary/hungary"),
+    country!("romania", "Romania", "Europe", "europe/romania/romania"),
+    country!("bulgaria", "Bulgaria", "Europe", "europe/bulgaria/bulgaria"),
+    country!("ukraine", "Ukraine", "Europe", "europe/ukraine/ukraine"),
+    country!("belarus", "Belarus", "Europe", "europe/belarus/belarus"),
+    country!("turkey", "Turkey", "Europe", "europe/turkey/turkey"),
     // North America (country level)
-    country!("canada", "Canada", "North America", "north-america/canada"),
-    country!("mexico", "Mexico", "North America", "north-america/mexico"),
+    country!(
+        "canada",
+        "Canada",
+        "North America",
+        "north-america/canada/canada"
+    ),
+    country!(
+        "mexico",
+        "Mexico",
+        "North America",
+        "north-america/mexico/mexico"
+    ),
     // Asia (country level)
-    country!("japan", "Japan", "Asia", "asia/japan"),
-    country!("south-korea", "South Korea", "Asia", "asia/south-korea"),
-    country!("indonesia", "Indonesia", "Asia", "asia/indonesia"),
-    country!("thailand", "Thailand", "Asia", "asia/thailand"),
-    country!("vietnam", "Vietnam", "Asia", "asia/vietnam"),
+    country!("japan", "Japan", "Asia", "asia/japan/japan"),
+    country!(
+        "south-korea",
+        "South Korea",
+        "Asia",
+        "asia/south-korea/south-korea"
+    ),
+    country!("indonesia", "Indonesia", "Asia", "asia/indonesia/indonesia"),
+    country!("thailand", "Thailand", "Asia", "asia/thailand/thailand"),
+    country!("vietnam", "Vietnam", "Asia", "asia/vietnam/vietnam"),
     country!(
         "malaysia",
         "Malaysia",
         "Asia",
-        "asia/malaysia-singapore-brunei"
+        "asia/malaysia-singapore-brunei/malaysia-singapore-brunei"
     ),
-    country!("philippines", "Philippines", "Asia", "asia/philippines"),
-    country!("pakistan", "Pakistan", "Asia", "asia/pakistan"),
-    country!("bangladesh", "Bangladesh", "Asia", "asia/bangladesh"),
-    country!("iran", "Iran", "Asia", "asia/iran"),
+    country!(
+        "philippines",
+        "Philippines",
+        "Asia",
+        "asia/philippines/philippines"
+    ),
+    country!("pakistan", "Pakistan", "Asia", "asia/pakistan/pakistan"),
+    country!(
+        "bangladesh",
+        "Bangladesh",
+        "Asia",
+        "asia/bangladesh/bangladesh"
+    ),
+    country!("iran", "Iran", "Asia", "asia/iran/iran"),
     // Oceania (country level)
     country!(
         "australia",
         "Australia",
         "Oceania",
-        "australia-oceania/australia"
+        "australia-oceania/australia/australia"
     ),
     // South America (country level)
-    country!("brazil", "Brazil", "South America", "south-america/brazil"),
+    country!(
+        "brazil",
+        "Brazil",
+        "South America",
+        "south-america/brazil/brazil"
+    ),
     country!(
         "argentina",
         "Argentina",
         "South America",
-        "south-america/argentina"
+        "south-america/argentina/argentina"
     ),
     country!(
         "colombia",
         "Colombia",
         "South America",
-        "south-america/colombia"
+        "south-america/colombia/colombia"
     ),
-    country!("peru", "Peru", "South America", "south-america/peru"),
-    country!("chile", "Chile", "South America", "south-america/chile"),
+    country!("peru", "Peru", "South America", "south-america/peru/peru"),
+    country!(
+        "chile",
+        "Chile",
+        "South America",
+        "south-america/chile/chile"
+    ),
     // Africa (country level)
     country!(
         "south-africa",
         "South Africa",
         "Africa",
-        "africa/south-africa"
+        "africa/south-africa/south-africa"
     ),
-    country!("egypt", "Egypt", "Africa", "africa/egypt"),
-    country!("nigeria", "Nigeria", "Africa", "africa/nigeria"),
-    country!("kenya", "Kenya", "Africa", "africa/kenya"),
-    country!("morocco", "Morocco", "Africa", "africa/morocco"),
-    country!("ethiopia", "Ethiopia", "Africa", "africa/ethiopia"),
+    country!("egypt", "Egypt", "Africa", "africa/egypt/egypt"),
+    country!("nigeria", "Nigeria", "Africa", "africa/nigeria/nigeria"),
+    country!("kenya", "Kenya", "Africa", "africa/kenya/kenya"),
+    country!("morocco", "Morocco", "Africa", "africa/morocco/morocco"),
+    country!("ethiopia", "Ethiopia", "Africa", "africa/ethiopia/ethiopia"),
     // United States — decomposed into 8 state extracts (`us` is NOT in the set)
     subregion!(
         "us/california",
         "US: California",
         "us",
         "North America",
-        "north-america/us/california"
+        "north-america/us/california/california"
     ),
     subregion!(
         "us/texas",
         "US: Texas",
         "us",
         "North America",
-        "north-america/us/texas"
+        "north-america/us/texas/texas"
     ),
     subregion!(
         "us/florida",
         "US: Florida",
         "us",
         "North America",
-        "north-america/us/florida"
+        "north-america/us/florida/florida"
     ),
     subregion!(
         "us/new-york",
         "US: New York",
         "us",
         "North America",
-        "north-america/us/new-york"
+        "north-america/us/new-york/new-york"
     ),
     subregion!(
         "us/washington",
         "US: Washington",
         "us",
         "North America",
-        "north-america/us/washington"
+        "north-america/us/washington/washington"
     ),
     subregion!(
         "us/illinois",
         "US: Illinois",
         "us",
         "North America",
-        "north-america/us/illinois"
+        "north-america/us/illinois/illinois"
     ),
     subregion!(
         "us/georgia",
         "US: Georgia",
         "us",
         "North America",
-        "north-america/us/georgia"
+        "north-america/us/georgia/georgia"
     ),
     subregion!(
         "us/pennsylvania",
         "US: Pennsylvania",
         "us",
         "North America",
-        "north-america/us/pennsylvania"
+        "north-america/us/pennsylvania/pennsylvania"
     ),
     // India — decomposed into its 6 zones (`india` is NOT in the set)
     subregion!(
@@ -288,42 +333,42 @@ pub const REGIONS: &[Region] = &[
         "India: Central Zone",
         "india",
         "Asia",
-        "asia/india/central-zone"
+        "asia/india/central-zone/central-zone"
     ),
     subregion!(
         "india/eastern-zone",
         "India: Eastern Zone",
         "india",
         "Asia",
-        "asia/india/eastern-zone"
+        "asia/india/eastern-zone/eastern-zone"
     ),
     subregion!(
         "india/north-eastern-zone",
         "India: North Eastern Zone",
         "india",
         "Asia",
-        "asia/india/north-eastern-zone"
+        "asia/india/north-eastern-zone/north-eastern-zone"
     ),
     subregion!(
         "india/northern-zone",
         "India: Northern Zone",
         "india",
         "Asia",
-        "asia/india/northern-zone"
+        "asia/india/northern-zone/northern-zone"
     ),
     subregion!(
         "india/southern-zone",
         "India: Southern Zone",
         "india",
         "Asia",
-        "asia/india/southern-zone"
+        "asia/india/southern-zone/southern-zone"
     ),
     subregion!(
         "india/western-zone",
         "India: Western Zone",
         "india",
         "Asia",
-        "asia/india/western-zone"
+        "asia/india/western-zone/western-zone"
     ),
     // China — decomposed into 6 provinces (`china` is NOT in the set)
     subregion!(
@@ -331,42 +376,42 @@ pub const REGIONS: &[Region] = &[
         "China: Guangdong",
         "china",
         "Asia",
-        "asia/china/guangdong"
+        "asia/china/guangdong/guangdong"
     ),
     subregion!(
         "china/jiangsu",
         "China: Jiangsu",
         "china",
         "Asia",
-        "asia/china/jiangsu"
+        "asia/china/jiangsu/jiangsu"
     ),
     subregion!(
         "china/shandong",
         "China: Shandong",
         "china",
         "Asia",
-        "asia/china/shandong"
+        "asia/china/shandong/shandong"
     ),
     subregion!(
         "china/zhejiang",
         "China: Zhejiang",
         "china",
         "Asia",
-        "asia/china/zhejiang"
+        "asia/china/zhejiang/zhejiang"
     ),
     subregion!(
         "china/sichuan",
         "China: Sichuan",
         "china",
         "Asia",
-        "asia/china/sichuan"
+        "asia/china/sichuan/sichuan"
     ),
     subregion!(
         "china/henan",
         "China: Henan",
         "china",
         "Asia",
-        "asia/china/henan"
+        "asia/china/henan/henan"
     ),
     // Russia — decomposed into 4 federal districts (`russia` is NOT in the
     // set). Russia hangs directly off the download root (a top-level directory
@@ -376,28 +421,28 @@ pub const REGIONS: &[Region] = &[
         "Russia: Central FD",
         "russia",
         "Europe",
-        "russia/central-fed-district"
+        "russia/central-fed-district/central-fed-district"
     ),
     subregion!(
         "russia/northwestern-fed-district",
         "Russia: Northwestern FD",
         "russia",
         "Europe",
-        "russia/northwestern-fed-district"
+        "russia/northwestern-fed-district/northwestern-fed-district"
     ),
     subregion!(
         "russia/volga-fed-district",
         "Russia: Volga FD",
         "russia",
         "Europe",
-        "russia/volga-fed-district"
+        "russia/volga-fed-district/volga-fed-district"
     ),
     subregion!(
         "russia/siberian-fed-district",
         "Russia: Siberian FD",
         "russia",
         "Asia",
-        "russia/siberian-fed-district"
+        "russia/siberian-fed-district/siberian-fed-district"
     ),
 ];
 
@@ -516,22 +561,24 @@ mod tests {
 
     #[test]
     fn source_urls_follow_the_verified_geofabrik_layout() {
-        // Cross-checked against the live index (2026-08-22):
+        // Cross-checked against the live index (2026-11-22): Geofabrik moved
+        // country/subregion PBFs into a doubled directory layout
+        // (europe/germany/germany-latest.osm.pbf, not europe/germany-latest.osm.pbf).
         assert_eq!(
             by_path("germany").unwrap().source_url(),
-            "https://download.geofabrik.de/europe/germany-latest.osm.pbf"
+            "https://download.geofabrik.de/europe/germany/germany-latest.osm.pbf"
         );
         assert_eq!(
             by_path("us/california").unwrap().source_url(),
-            "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf"
+            "https://download.geofabrik.de/north-america/us/california/california-latest.osm.pbf"
         );
         assert_eq!(
             by_path("ireland").unwrap().source_url(),
-            "https://download.geofabrik.de/europe/ireland-and-northern-ireland-latest.osm.pbf"
+            "https://download.geofabrik.de/europe/ireland-and-northern-ireland/ireland-and-northern-ireland-latest.osm.pbf"
         );
         assert_eq!(
             by_path("russia/volga-fed-district").unwrap().checksum_url(),
-            "https://download.geofabrik.de/russia/volga-fed-district-latest.osm.pbf.md5"
+            "https://download.geofabrik.de/russia/volga-fed-district/volga-fed-district-latest.osm.pbf.md5"
         );
     }
 
